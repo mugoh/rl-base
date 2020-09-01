@@ -1,7 +1,8 @@
 import numpy as np
 import torch
 
-from .core import calculate_rtg
+from .core import discounted_cumsum
+
 
 class ReplayBuffer:
     """
@@ -46,7 +47,9 @@ class ReplayBuffer:
 
         self.ptr = 0
         self.eps_end_ptr = 0
-        return torch.as_tensor(self.actions), torch.as_tensor(self.rewards), torch.as_tensor(self.states), torch.as_tensor(self.adv), torch.as_tensor(self.log_prob)
+        return torch.as_tensor(self.actions), torch.as_tensor(self.rewards), \
+            torch.as_tensor(self.states), torch.as_tensor(
+            self.adv), torch.as_tensor(self.log_prob)
 
     def end_eps(self, value=0):
         """
@@ -63,12 +66,9 @@ class ReplayBuffer:
 
         # GAE
         deltas = rew[:-1] + self.gamma * vals[1:] - vals[:-1]
-        self.adv[idx] = calculate_rtg(deltas, self.gamma * self.lamda)
+        self.adv[idx] = discounted_cumsum(deltas, self.gamma * self.lamda)
 
         # Reward to go
-        self.rewards[idx] = calculate_rtg(rew, self.gamma)[:-1]
+        self.rewards[idx] = discounted_cumsum(rew, self.gamma)[:-1]
 
         self.eps_end_ptr = self.ptr
-
-
-

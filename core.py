@@ -6,6 +6,33 @@ import numpy as np
 from gym.spaces import Discrete
 
 
+def discounted_cumsum(rew, disc):
+    """
+        Calculates rewards to go
+    """
+    rew_len = len(rew)
+    disc_array = np.repeat(disc, rew_len)
+
+    all_rtg = []
+
+    for t in range(rew_len):
+
+        # indices t' to T-1
+        indices = np.arange(t, rew_len)
+
+        # gamma^(t'-t)
+        discounts = np.power(disc, indices - t)
+
+        # r_t' * decay
+        rtg = rew[t:, ] * discounts
+
+        # sum_{t'=t}^{T-1} rtg
+        rtg_sum = np.sum(rtg)
+
+        all_rtg.append(rtg_sum)
+
+    return np.asanyarray(all_rtg)
+
 
 def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
     """
@@ -24,15 +51,19 @@ def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Ident
 
     return nn.Sequential(*net_layers)
 
+
 class MLPCritic(nn.Module):
     """
         Agent Critic
         Estmates value function
     """
+
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, size=2):
         super(MLPCritic, self).__init__()
 
-        self.net = mlp(obs_dim, hidden_sizes + [1], activation=activation, size=size)
+        self.net = mlp(obs_dim, hidden_sizes +
+                       [1], activation=activation, size=size)
+
     def forward(self, obs):
         """
             Get value function estimate
@@ -40,10 +71,10 @@ class MLPCritic(nn.Module):
         return torch.squeeze(self.net(obs), axis=-1)
 
 
-
 class Actor(nn.Module):
     def __init__(self, **args):
         super(Actor, self).__init__()
+
     def forward(self, obs, ac=None):
         """
             Gives policy under current observation
@@ -66,7 +97,8 @@ class MLPGaussianPolicy(Actor):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation=nn.Tanh, size=2):
         super(MLPGaussianPolicy, self).__init__()
 
-        self.logits = mlp(obs_dim, hidden_sizes + [act_dim], activation, size=size)
+        self.logits = mlp(obs_dim, hidden_sizes +
+                          [act_dim], activation, size=size)
         self.log_std = nn.Parameter(torch.as_tensor(np.zeros(act_dim)))
 
     def sample_action(self, obs):
@@ -86,17 +118,20 @@ class MLPGaussianPolicy(Actor):
             The log probability of taken action
             a in policy pi
         """
-        return pi.log_prob(a).sum(axis=-1) # Sum needed for Torch normal distr.
+        return pi.log_prob(a).sum(axis=-1)  # Sum needed for Torch normal distr.
 
 
 class CategoricalPolicy(Actor):
     """
         Categorical Policy for discrete action spaces
     """
+
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation=nn.Tanh, size=2):
         super(CategoricalPolicy, self).__init__()
 
-        self.logits = mlp(obs_dim, hidden_sizes + [act_dim], activation, size=size)
+        self.logits = mlp(obs_dim, hidden_sizes +
+                          [act_dim], activation, size=size)
+
     def sample_action(self, obs):
         """
             Get new policy
@@ -119,6 +154,7 @@ class MLPActor(nn.Module):
     """
         Agent actor Net
     """
+
     def __init__(self, obs_space, act_space, hidden_size=[32, 32], activation=nn.Tanh, size=2):
         super(Actor, self).__init__()
 
@@ -127,21 +163,22 @@ class MLPActor(nn.Module):
         discrete = True if isinstance(act_space, Discrete) else False
         act_dim = act_space.n if discrete else act_space.shape[0]
 
-
         if discrete:
-            self.pi = CategoricalPolicy(obs_dim, act_dim, hidden_size, size=size, activation=activation)
+            self.pi = CategoricalPolicy(
+                obs_dim, act_dim, hidden_size, size=size, activation=activation)
         else:
-            self.pi = MLPGaussianPolicy(obs_dim, act_dim, hidden_size,activation=activation, size=size)
+            self.pi = MLPGaussianPolicy(
+                obs_dim, act_dim, hidden_size, activation=activation, size=size)
 
-
-            self.v =MLPCritic(obs_dim, act_dim, hidden_sizes=hidden_size, size=size, activation=activation)
+            self.v = MLPCritic(
+                obs_dim, act_dim, hidden_sizes=hidden_size, size=size, activation=activation)
 
     def step(self, obs):
         """
             Get value function estimate and action sample from pi
         """
         with torch.no_grad():
-            pi_new  = self.sample_action()
+            pi_new = self.sample_action()
             a = pi_new.sample()
 
             v = self.v(obs)
