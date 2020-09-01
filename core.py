@@ -40,7 +40,25 @@ class MLPCritic(nn.Module):
         return torch.squeeze(self.net(obs), axis=-1)
 
 
-class MLPGaussianPolicy(nn.Module):
+
+class Actor(nn.Module):
+    def __init__(self, **args):
+        super(Actor, self).__init__()
+    def forward(self, obs, ac=None):
+        """
+            Gives policy under current observation
+            and optionally action log prob from that
+            policy
+        """
+        pi = self.sample_action(obs)
+        log_p = None
+
+        if ac is not None:
+            log_p = self.log_p(pi, ac)
+        return pi, log_p
+
+
+class MLPGaussianPolicy(Actor):
     """
         Gaussian Policy for stochastic actions
     """
@@ -71,7 +89,7 @@ class MLPGaussianPolicy(nn.Module):
         return pi.log_prob(a).sum(axis=-1) # Sum needed for Torch normal distr.
 
 
-class CategoricalPolicy(nn.Module):
+class CategoricalPolicy(Actor):
     """
         Categorical Policy for discrete action spaces
     """
@@ -97,7 +115,7 @@ class CategoricalPolicy(nn.Module):
         return p.log_prob(a)
 
 
-class Actor(nn.Module):
+class MLPActor(nn.Module):
     """
         Agent actor Net
     """
