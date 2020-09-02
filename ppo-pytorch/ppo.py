@@ -97,12 +97,11 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=4000, s
     pi_optimizer = optim.adam(pi.parameters(), args.get('pi_lr') or 1e-4)
     v_optimizer = optim.adam(v_func.parameters(), args.get('v_lr') or 1e-3)
 
-    pi_losses, v_losses = [], [] # Hold epoch losses for logging
-    pi_kl = [] # kls for logging
+    pi_losses, v_losses = [], []  # Hold epoch losses for logging
+    pi_kl = []  # kls for logging
     v_logs = []
 
-    logger = SummaryWriter()
-
+    logger = SummaryWriter(log_dir='.data/')
 
     def compute_pi_loss(log_p_old, adv_b, act_b, obs_b):
         """
@@ -134,8 +133,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=4000, s
 
         return v_loss
 
-
-    def update():
+    def update(epoch):
         """
             Update the policy and value function from loss
         """
@@ -162,10 +160,9 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=4000, s
         pi_losses.append(pi_loss)
         pi_kl.append(kl)
 
-        logger.add_scalar('loss/pi', pi_loss)
-        logger.add_scalar('loss/v', v_loss)
-        # Print loss_pi, loss_v, kl
-        # time
+        logger.add_scalar('loss/pi', pi_loss, epoch)
+        logger.add_scalar('loss/v', v_loss, epoch)
+        logger.add_scalar('Kl', kl, epoch)
 
     start_time = time.time()
     obs = env.reset()
@@ -185,11 +182,11 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=4000, s
 
             memory.store(a, obs, values=v, rew=eps_ret)
 
-            if done or step == steps_per_epoch -1 :
+            if done or step == steps_per_epoch - 1:
                 # terminated by max episode steps
                 if not done:
                     last_v = v_func(obs)
-                else: # Agent terminated episode
+                else:  # Agent terminated episode
                     last_v = 0
 
                     # only log these for terminals
@@ -200,27 +197,39 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=4000, s
                 obs_n = env.reset()
                 eps_len, eps_ret = 0, 0
 
-
-
             obs = obs_n
-        update()
+        update(t)
 
         # Print info for each epoch: loss_pi, loss_v, kl
         # time, v at traj collection, eps_len, epoch_no,
         # eps_ret: min, max, av
         RunTime = time.time() - start_time
         AverageEpisodeLen = np.mean(eps_len_logs)
+
+        logger.add_scalar('AvEpsLen', AverageEpisodeLen, t)
         # MaxEpisodeLen = np.max(eps_len_logs)
         # MinEpsiodeLen = np.min(eps_len_logs)
         AverageEpsReturn = np.mean(eps_ret_log)
         MaxEpsReturn = np.max(eps_ret_log)
         MinEpsReturn = np.min(eps_ret_log)
 
+        logger.add_scalar('EpsReturn/Max', MaxEpsReturn, t)
+        logger.add_scalar('EpsReturn/Min', MinEpsReturn, t)
+        logger.add_scalar('EpsReturn/Average', AverageEpsReturn, t)
+
         Pi_Loss = pi_losses[t]
         V_loss = v_losses[t]
         Kl = pi_kl[t]
 
-
+        print('\n', '-' * 15)
+        print('AverageEpsReturn: ', AverageEpsReturn)
+        print('MinEpsReturn: ', MinEpsReturn)
+        print('MaxEpsReturn: ', MaxEpsReturn)
+        print('KL: ', Kl)
+        print('AverageEpsLen: ', AverageEpisodeLen)
+        print('Pi loss: ', Pi_Loss)
+        print('V loss: ', V_loss)
+        print('Run time: ', RunTime)
 
 
 def main():
