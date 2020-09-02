@@ -77,8 +77,8 @@ class Actor(nn.Module):
 
     def forward(self, obs, ac=None):
         """
-            Gives policy under current observation
-            and optionally action log prob from that
+            Gives policy for given observations
+            and optionally actions log prob under that
             policy
         """
         pi = self.sample_action(obs)
