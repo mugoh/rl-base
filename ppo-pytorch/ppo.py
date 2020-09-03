@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import gym
 import time
+import os
 
 import core
 from core import dcum2 as discounted_cumsum
@@ -81,7 +82,7 @@ class ReplayBuffer:
         self.eps_end_ptr = self.ptr
 
 
-def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=40, steps_per_epoch=5000, max_eps_len=1000, clip_ratio=.2, **args):
+def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps_per_epoch=5000, max_eps_len=1000, clip_ratio=.2, **args):
     """
     actor_args: hidden_size(list), size(int)-network size, pi_lr,
      v_lr
@@ -107,8 +108,15 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=40, ste
     pi_losses, v_losses = [], []  # Hold epoch losses for logging
     pi_kl = []  # kls for logging
     v_logs = []
+    first_run_ret = None
 
-    logger = SummaryWriter(log_dir='data/')
+    run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
+    path = os.path.join('data', env.unwrapped.spec.id + '_' + run_t + args.get('env_name', ''))
+
+    #if not os.path.exists(path):
+    #    os.makedirs(path)
+
+    logger = SummaryWriter(log_dir=path)
 
     def compute_pi_loss(log_p_old, adv_b, act_b, obs_b):
         """
@@ -178,7 +186,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=40, ste
     obs = env.reset()
     eps_len, eps_ret = 0, 0
 
-    for t in range(epoch_size):
+    for t in range(n_epochs):
         eps_len_logs, eps_ret_log = [], []
         for step in range(steps_per_epoch):
             a, v, log_p = actor.step(torch.as_tensor(obs, dtype=torch.float32))
@@ -199,7 +207,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=40, ste
             if terminal or step == steps_per_epoch - 1:
                 # terminated by max episode steps
                 if not done:
-                    last_v = v_func(torch.as_tensor(obs, dtype=torch.float32))
+                    last_v = actor.step(torch.as_tensor(obs, dtype=torch.float32))[1]
                 else:  # Agent terminated episode
                     last_v = 0
 
@@ -238,6 +246,9 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=40, ste
         V_loss = v_losses[t]
         Kl = pi_kl[t]
 
+        if t == 0:
+            first_run_ret = AverageEpsReturn
+
         print('\n', t)
         print('', '-' * 35)
         print('AverageEpsReturn: ', AverageEpsReturn)
@@ -247,6 +258,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.98, lamda=.95, epoch_size=40, ste
         print('AverageEpsLen: ', AverageEpisodeLen)
         print('Pi_loss: ', Pi_Loss)
         print('V_loss: ', V_loss)
+        print('FirstEpochAvReturn: ', first_run_ret)
         print('Run time: ', RunTime)
         print('\n\n\n')
 
@@ -262,8 +274,9 @@ def main():
         'hidden_size': [32, 32],
         'size': 2
     }
+    agent_args = {'n_epochs': 200, 'env_name': ''}
 
-    args = {'ac_args': ac_args, 'pi_lr': 1e-4, 'v_lr': 1e-3}
+    args = {'ac_args': ac_args, 'pi_lr': 3e-4, 'v_lr': 1e-3, **agent_args}
 
     ppo(env, **args)
 

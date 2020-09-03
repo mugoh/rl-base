@@ -96,6 +96,9 @@ class Actor(nn.Module):
         pi = self.sample_action(obs)
         log_p = None
 
+        if isinstance(self, CategoricalPolicy):
+            ac=ac.unsqueeze(-1)
+
         if ac is not None:
             log_p = self.log_p(pi, ac)
         return pi, log_p
@@ -149,9 +152,9 @@ class CategoricalPolicy(Actor):
             Get new policy
         """
         logits = self.logits(obs)
-        pi = torch.distributions.Categorical(logits)
+        pi = torch.distributions.Categorical(logits=logits)
 
-        return torch.distributions.Categorical(logits)
+        return pi
 
     @classmethod
     def log_p(cls, p, a):
@@ -182,8 +185,8 @@ class MLPActor(nn.Module):
             self.pi = MLPGaussianPolicy(
                 obs_dim, act_dim, hidden_size, activation=activation, size=size)
 
-            self.v = MLPCritic(
-                obs_dim, act_dim, hidden_sizes=hidden_size, size=size, activation=activation)
+        self.v = MLPCritic(
+            obs_dim, act_dim, hidden_sizes=hidden_size, size=size, activation=activation)
 
     def step(self, obs):
         """
