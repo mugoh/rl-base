@@ -42,6 +42,13 @@ def dcum2(rew, disc):
     """
     return scipy.signal.lfilter([1], [1, float(-disc)], rew[::-1], axis=0)[::-1]
 
+def count(module):
+    """
+        Returns a count of the parameters
+        in a module
+    """
+    return np.sum([np.prod(p.shape) for p in module.parameters()])
+
 
 def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
     """

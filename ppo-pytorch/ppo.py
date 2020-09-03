@@ -84,8 +84,9 @@ class ReplayBuffer:
 
 def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps_per_epoch=5000, max_eps_len=1000, clip_ratio=.2, **args):
     """
-    actor_args: hidden_size(list), size(int)-network size, pi_lr,
-     v_lr
+    actor_args: hidden_size(list), size(int)-network size, pi_lr, v_lr
+    max_lr: Max kl divergence between new and old polices (0.01 - 0.05)
+            Triggers early stopping for pi training
     """
 
     obs_space = env.observation_space
@@ -97,23 +98,26 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
 
     actor = actor_class(obs_space=obs_space,
                         act_space=act_space, **args['ac_args'])
-    pi, v_func = actor.pi, actor.v
+    params = [core.count(module) for module in (actor.pi, actor.v)]
+    print(f'\nParameters\npi: {params[0]}  v: { params[1] }')
 
     memory = ReplayBuffer(act_dim, obs_dim, steps_per_epoch,
                           lamda=lamda, gamma=gamma)
 
-    pi_optimizer = optim.Adam(pi.parameters(), args.get('pi_lr') or 1e-4)
-    v_optimizer = optim.Adam(v_func.parameters(), args.get('v_lr') or 1e-3)
+    pi_optimizer = optim.Adam(actor.pi.parameters(), args.get('pi_lr') or 1e-4)
+    v_optimizer = optim.Adam(actor.v.parameters(), args.get('v_lr') or 1e-3)
 
-    pi_losses, v_losses = [], []  # Hold epoch losses for logging
+    # Hold epoch losses for logging
+    pi_losses, v_losses, delta_v_logs, delta_pi_logs = [], [], [], []
     pi_kl = []  # kls for logging
     v_logs = []
     first_run_ret = None
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
-    path = os.path.join('data', env.unwrapped.spec.id + '_' + run_t + args.get('env_name', ''))
+    path = os.path.join('data', env.unwrapped.spec.id +
+                        '_' + run_t + args.get('env_name', ''))
 
-    #if not os.path.exists(path):
+    # if not os.path.exists(path):
     #    os.makedirs(path)
 
     logger = SummaryWriter(log_dir=path)
@@ -123,16 +127,13 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
             Pi loss
         """
 
-        nonlocal pi
-
         # returns new_pi_normal_distribution, logp_act
-        _, log_p_ = pi(obs_b, act_b)
-        log_p_= log_p_.type(torch.float32)  # From torch.float64
+        _, log_p_ = actor.pi(obs_b, act_b)
+        log_p_ = log_p_.type(torch.float32)  # From torch.float64
 
         pi_ratio = torch.exp(log_p_ - log_p_old)
-        min_adv = torch.where(adv_b >= 0, (1 + clip_ratio)
+        min_adv = torch.where(adv_b > 0, (1 + clip_ratio)
                               * adv_b, (1-clip_ratio) * adv_b)
-
 
         pi_loss = -torch.mean(torch.min(pi_ratio * adv_b, min_adv))
 
@@ -146,40 +147,65 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         """
         obs_b, rew_b = data['obs_b'], data['rew_b']
 
-        v_pred = v_func(obs_b)
+        v_pred = actor.v(obs_b)
         v_loss = torch.mean((v_pred - rew_b) ** 2)
 
         return v_loss
 
-    def update(epoch):
+    def update(epoch, train_args=args):
         """
             Update the policy and value function from loss
         """
         data = memory.get()
         act_b, rew_b, obs_b, adv_b, log_p_old = data
 
-        pi_optimizer.zero_grad()
-        pi_loss, kl = compute_pi_loss(
+        # loss before update
+        pi_loss_old, kl = compute_pi_loss(
             log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
 
-        pi_loss.backward()
-        pi_optimizer.step()
+        for i in range(train_args[ 'pi_train_n_iters' ]):
+            pi_optimizer.zero_grad()
+            pi_loss, kl = compute_pi_loss(
+                log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
 
-        v_optimizer.zero_grad()
-        v_loss = compute_v_loss({'obs_b': obs_b, 'rew_b': rew_b})
+            if kl > 1.5 * train_args['max_kl']:  # Early stop for high Kl
+                logger.add_scalar('KlStopIter', i)
+                print('Max kl reached: ', kl, '  iter: ', i)
+                break
 
-        v_loss.backward()
-        v_optimizer.step()
+            pi_loss.backward()
+            pi_optimizer.step()
+
 
         pi_loss = pi_loss.item()
-        v_loss = v_loss.item()
-        v_losses.append(v_loss)
+
+        # loss before update
+        v_loss_old = compute_v_loss({'obs_b': obs_b, 'rew_b': rew_b}).item()
+
+        for i in range(train_args[ 'v_train_n_iters' ]):
+            v_optimizer.zero_grad()
+            v_loss = compute_v_loss({'obs_b': obs_b, 'rew_b': rew_b})
+
+            v_loss.backward()
+            v_optimizer.step()
+
+            v_loss = v_loss.item()
 
         pi_losses.append(pi_loss)
         pi_kl.append(kl)
+        v_losses.append(v_loss)
+
+        delta_v_loss = v_loss_old - v_loss
+        delta_pi_loss = pi_loss_old.item() - pi_loss
+
+        delta_v_logs.append(delta_v_loss)
+        delta_pi_logs.append(delta_pi_loss)
 
         logger.add_scalar('loss/pi', pi_loss, epoch)
         logger.add_scalar('loss/v', v_loss, epoch)
+
+        logger.add_scalar('loss/Delta-Pi', delta_pi_loss, epoch)
+        logger.add_scalar('loss/Delta-V', delta_v_loss, epoch)
         logger.add_scalar('Kl', kl, epoch)
 
     start_time = time.time()
@@ -207,7 +233,8 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
             if terminal or step == steps_per_epoch - 1:
                 # terminated by max episode steps
                 if not done:
-                    last_v = actor.step(torch.as_tensor(obs, dtype=torch.float32))[1]
+                    last_v = actor.step(torch.as_tensor(
+                        obs, dtype=torch.float32))[1]
                 else:  # Agent terminated episode
                     last_v = 0
 
@@ -216,13 +243,12 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
                     eps_len_logs += [eps_len]
                     eps_ret_log += [eps_ret]
 
-
                 memory.end_eps(value=last_v)
                 obs = env.reset()
                 eps_len, eps_ret = 0, 0
 
-
-        update(t)
+        update(t + 1)
+        l_t = t + 1 # log_time, start at 1
 
         # Print info for each epoch: loss_pi, loss_v, kl
         # time, v at traj collection, eps_len, epoch_no,
@@ -230,26 +256,28 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         RunTime = time.time() - start_time
         AverageEpisodeLen = np.mean(eps_len_logs)
 
-        logger.add_scalar('AvEpsLen', AverageEpisodeLen, t)
+        logger.add_scalar('AvEpsLen', AverageEpisodeLen, l_t)
         # MaxEpisodeLen = np.max(eps_len_logs)
         # MinEpsiodeLen = np.min(eps_len_logs)
         AverageEpsReturn = np.mean(eps_ret_log)
         MaxEpsReturn = np.max(eps_ret_log)
         MinEpsReturn = np.min(eps_ret_log)
 
-        logger.add_scalar('EpsReturn/Max', MaxEpsReturn, t)
-        logger.add_scalar('EpsReturn/Min', MinEpsReturn, t)
-        logger.add_scalar('EpsReturn/Average', AverageEpsReturn, t)
+        logger.add_scalar('EpsReturn/Max', MaxEpsReturn, l_t)
+        logger.add_scalar('EpsReturn/Min', MinEpsReturn, l_t)
+        logger.add_scalar('EpsReturn/Average', AverageEpsReturn, l_t)
 
-
+        # Retrieved by index, not time step ( no +1 )
         Pi_Loss = pi_losses[t]
         V_loss = v_losses[t]
         Kl = pi_kl[t]
+        delta_v_loss = delta_v_logs[t]
+        delta_pi_loss = delta_pi_logs[t]
 
         if t == 0:
             first_run_ret = AverageEpsReturn
 
-        print('\n', t)
+        print('\n', t + 1)
         print('', '-' * 35)
         print('AverageEpsReturn: ', AverageEpsReturn)
         print('MinEpsReturn: ', MinEpsReturn)
@@ -260,6 +288,8 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         print('V_loss: ', V_loss)
         print('FirstEpochAvReturn: ', first_run_ret)
         print('Run time: ', RunTime)
+        print('Delta-V: ', delta_v_loss)
+        print('Delta-Pi: ', delta_pi_loss)
         print('\n\n\n')
 
 
@@ -271,12 +301,17 @@ def main():
     env = gym.make('HalfCheetah-v3')
 
     ac_args = {
-        'hidden_size': [32, 32],
-        'size': 2
+        'hidden_size': [64, 64],
+        'size': 10
     }
-    agent_args = {'n_epochs': 200, 'env_name': ''}
+    train_args = {
+        'pi_train_n_iters': 80,
+        'v_train_n_iters': 80,
+        'max_kl': .01
+    }
+    agent_args = {'n_epochs': 100, 'env_name': '', 'steps_per_epoch' : 5000}
 
-    args = {'ac_args': ac_args, 'pi_lr': 3e-4, 'v_lr': 1e-3, **agent_args}
+    args = {'ac_args': ac_args, 'pi_lr': 3e-4, 'v_lr': 1e-3, 'gamma' : .99, **agent_args,  **train_args}
 
     ppo(env, **args)
 
