@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import numpy as np
 from gym.spaces import Discrete
 
+import scipy.signal
+
 
 def discounted_cumsum(rew, disc):
     """
@@ -33,6 +35,13 @@ def discounted_cumsum(rew, disc):
 
     return np.asanyarray(all_rtg)
 
+def dcum2(rew, disc):
+    """
+        Compare against discounted_cumsum
+        # Much faster than discounted_cumsum
+    """
+    return scipy.signal.lfilter([1], [1, float(-disc)], rew[::-1], axis=0)[::-1]
+
 
 def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
     """
@@ -40,14 +49,17 @@ def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Ident
     """
     net_layers = []
 
-    if len(hidden_layers) < size:
-        hidden_layers *= size
+    if len(hidden_layers[:-1]) < size:
+        hidden_layers[:-1] *= size
 
-    for layer in hidden_layers[:-1]:
-        x = nn.Linear(x, layer)
-        net_layers.append(x, activation())
+    for size in hidden_layers[:-1]:
+        layer = nn.Linear(x, size)
+        net_layers.append(layer)
+        net_layers.append(activation())
+        x = size
 
-    net_layers.append(nn.Linear(x, hidden_layers[-1], output_activation()))
+    net_layers.append(nn.Linear(x, hidden_layers[-1]))
+    net_layers += [output_activation()]
 
     return nn.Sequential(*net_layers)
 
@@ -108,7 +120,7 @@ class MLPGaussianPolicy(Actor):
             if sampled, returns an action on the policy given the observation
         """
         mu = self.logits(obs)
-        pi = torch.normal(mu, torch.exp(self.log_std))
+        pi = torch.distributions.Normal(loc=mu, scale=torch.exp(self.log_std))
 
         return pi
 
@@ -156,7 +168,7 @@ class MLPActor(nn.Module):
     """
 
     def __init__(self, obs_space, act_space, hidden_size=[32, 32], activation=nn.Tanh, size=2):
-        super(Actor, self).__init__()
+        super(MLPActor, self).__init__()
 
         obs_dim = obs_space.shape[0]
 
@@ -178,7 +190,7 @@ class MLPActor(nn.Module):
             Get value function estimate and action sample from pi
         """
         with torch.no_grad():
-            pi_new = self.sample_action()
+            pi_new = self.pi.sample_action(obs)
             a = pi_new.sample()
 
             v = self.v(obs)
