@@ -115,7 +115,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
     path = os.path.join('data', env.unwrapped.spec.id +
-                        '_' + args.get('env_name', '') + '_' + run_t)
+                        args.get('env_name', '') + '_' + run_t)
 
     # if not os.path.exists(path):
     #    os.makedirs(path)
@@ -132,14 +132,12 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         log_p_ = log_p_.type(torch.float32)  # From torch.float64
 
         pi_ratio = torch.exp(log_p_ - log_p_old)
-        min_adv = torch.where(adv_b > 0, (1 + clip_ratio)
+        min_adv = torch.where(adv_b >= 0, (1 + clip_ratio)
                               * adv_b, (1-clip_ratio) * adv_b)
 
         pi_loss = -torch.mean(torch.min(pi_ratio * adv_b, min_adv))
 
-        # pi = pi_new
-
-        return pi_loss, (log_p_old - log_p_).mean().item()
+        return pi_loss, (log_p_old - log_p_).mean().item()  # kl
 
     def compute_v_loss(data):
         """
@@ -177,10 +175,8 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
             pi_loss.backward()
             pi_optimizer.step()
 
-
-        logger.add_scalar('PiStopIter', i)
+        logger.add_scalar('PiStopIter', i, epoch)
         pi_loss = pi_loss.item()
-
 
         for i in range(train_args['v_train_n_iters']):
             v_optimizer.zero_grad()
@@ -301,7 +297,7 @@ def main():
     env = gym.make('HalfCheetah-v2')
 
     ac_args = {
-        'hidden_size': [32, 32],
+        'hidden_size': [64, 64],
         'size': 2
     }
     train_args = {
@@ -312,11 +308,11 @@ def main():
     }
     agent_args = {
         'n_epochs': 100,
-        'env_name': 'b_30000_plr_.02',
-        'steps_per_epoch': 30000
+        'env_name': '',  # 'b_10000_plr_.1e-4',
+        'steps_per_epoch': 10000
     }
 
-    args = {'ac_args': ac_args, 'pi_lr': .02, 'v_lr': 1e-2, 'gamma': .99, 'lamda': .97, **agent_args,  **train_args}
+    args = {'ac_args': ac_args, 'pi_lr': 1e-4, 'v_lr': 1e-3, 'gamma': .99, 'lamda': .97, **agent_args,  **train_args}
 
     ppo(env, **args)
 
