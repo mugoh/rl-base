@@ -121,7 +121,8 @@ class MLPGaussianPolicy(Actor):
 
         self.logits = mlp(obs_dim, hidden_sizes +
                           [act_dim], activation, size=size)
-        self.log_std = nn.Parameter(torch.as_tensor(np.zeros(act_dim)))
+        log_std = -.5 * np.ones(act_dim, dtype=np.float32)
+        self.log_std = nn.Parameter(torch.as_tensor(log_std))
 
     def sample_action(self, obs):
         """

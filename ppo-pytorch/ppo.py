@@ -115,7 +115,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
     path = os.path.join('data', env.unwrapped.spec.id +
-                        '_' + run_t + args.get('env_name', ''))
+                        '_' + args.get('env_name', '') + '_' + run_t)
 
     # if not os.path.exists(path):
     #    os.makedirs(path)
@@ -163,13 +163,14 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         pi_loss_old, kl = compute_pi_loss(
             log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
 
-        for i in range(train_args[ 'pi_train_n_iters' ]):
+        v_loss_old = compute_v_loss({'obs_b': obs_b, 'rew_b': rew_b}).item()
+
+        for i in range(train_args['pi_train_n_iters']):
             pi_optimizer.zero_grad()
             pi_loss, kl = compute_pi_loss(
                 log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
 
             if kl > 1.5 * train_args['max_kl']:  # Early stop for high Kl
-                logger.add_scalar('KlStopIter', i)
                 print('Max kl reached: ', kl, '  iter: ', i)
                 break
 
@@ -177,19 +178,18 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
             pi_optimizer.step()
 
 
+        logger.add_scalar('PiStopIter', i)
         pi_loss = pi_loss.item()
 
-        # loss before update
-        v_loss_old = compute_v_loss({'obs_b': obs_b, 'rew_b': rew_b}).item()
 
-        for i in range(train_args[ 'v_train_n_iters' ]):
+        for i in range(train_args['v_train_n_iters']):
             v_optimizer.zero_grad()
             v_loss = compute_v_loss({'obs_b': obs_b, 'rew_b': rew_b})
 
             v_loss.backward()
             v_optimizer.step()
 
-            v_loss = v_loss.item()
+        v_loss = v_loss.item()
 
         pi_losses.append(pi_loss)
         pi_kl.append(kl)
@@ -248,7 +248,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
                 eps_len, eps_ret = 0, 0
 
         update(t + 1)
-        l_t = t + 1 # log_time, start at 1
+        l_t = t + 1  # log_time, start at 1
 
         # Print info for each epoch: loss_pi, loss_v, kl
         # time, v at traj collection, eps_len, epoch_no,
@@ -298,20 +298,25 @@ def main():
         Ppo runner
     """
 
-    env = gym.make('HalfCheetah-v3')
+    env = gym.make('HalfCheetah-v2')
 
     ac_args = {
-        'hidden_size': [64, 64],
-        'size': 10
+        'hidden_size': [32, 32],
+        'size': 2
     }
     train_args = {
         'pi_train_n_iters': 80,
         'v_train_n_iters': 80,
-        'max_kl': .01
+        'max_kl': .01,
+        'max_eps_len': 150
     }
-    agent_args = {'n_epochs': 100, 'env_name': '', 'steps_per_epoch' : 5000}
+    agent_args = {
+        'n_epochs': 100,
+        'env_name': 'b_30000_plr_.02',
+        'steps_per_epoch': 30000
+    }
 
-    args = {'ac_args': ac_args, 'pi_lr': 3e-4, 'v_lr': 1e-3, 'gamma' : .99, **agent_args,  **train_args}
+    args = {'ac_args': ac_args, 'pi_lr': .02, 'v_lr': 1e-2, 'gamma': .99, 'lamda': .97, **agent_args,  **train_args}
 
     ppo(env, **args)
 
