@@ -40,7 +40,7 @@ class ReplayBuffer:
     def sample_recent(self, batch_size):
         """
             Returns recent transitions of size batch_size
-            in order: act, rew, obs, n_obs, log_p
+            in order: act, rew, obs, n_obs, dones, log_p
         """
         assert self.ptr >= batch_size
 
@@ -54,6 +54,8 @@ class ReplayBuffer:
             torch.as_tensor(
                 self.n_states[-batch_size:], dtype=torch.float32),
             torch.as_tensor(
+                self.dones[-batch_size:], dtype=torch.float32),
+            torch.as_tensor(
                 self.log_prob[-batch_size:], dtype=torch.float32)
         )
 
@@ -61,11 +63,16 @@ class ReplayBuffer:
         """
             Randomly sample trajectories upto the most recent
             itr_limit iterations
+
+            in order: act, rew, obs, n_obs, dones, log_p
         """
 
         lowest_iter = itr_limit * batch_size
+        low_ = 0
+        if self.ptr > lowest_iter:
+            low_ = lowest_iter
         idx = np.random.randint(
-            low=self.ptr - lowest_iter, high=self.ptr, size=batch_size)
+            low=self.ptr - low_, high=self.ptr, size=batch_size)
 
         return (
             torch.as_tensor(
@@ -76,6 +83,8 @@ class ReplayBuffer:
                 self.states[idx], dtype=torch.float32),
             torch.as_tensor(
                 self.n_states[idx], dtype=torch.float32),
+            torch.as_tensor(
+                self.dones[idx], dtype=torch.float32),
             torch.as_tensor(
                 self.log_prob[idx], dtype=torch.float32)
         )

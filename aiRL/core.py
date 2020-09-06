@@ -78,10 +78,15 @@ class Discriminator(nn.Module):
             estimate. Given by:
 
             f(s, a, s') = g(s) + gamma * h(s') - h(s)
+
+
+            Parameters
+            ----------
+            data    | [obs, obs_n, dones]
         """
-        obs, obs_n = data
+        obs, obs_n, dones = data
         f_thet_phi = self.g_theta(obs) + self.gamma * \
-            self.h_phi(obs_n) - self.h_phi(obs)
+            (1 - dones) * self.h_phi(obs_n) - self.h_phi(obs)
 
         return f_thet_phi
 
