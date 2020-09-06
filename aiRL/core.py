@@ -1,11 +1,15 @@
 """
     g_args: hidden_layers=[32, 1], activation=nn.Identity
     h_args: hidden_layers=[32, 32, 1], activation=nn.ReLu
+
+    TOLOG: diff: f*(s, a) and log*pi(a|s). Should be equal
 """
 import torch.nn as nn
 import torch
 
 import numpy as np
+
+from gym.utils import Discrete
 
 
 def count(module):
@@ -63,18 +67,145 @@ class Discriminator(nn.Module):
 
         # *g(s) = *r(s) + const
         #  g(s) recovers the optimal reward function +  c
-        self.g_theta = torch.squeeze(mlp(obs_dim, **args['g_args']))
+        self.g_theta = torch.squeeze(mlp(obs_dim, **args['g_args']), axis=-1)
 
         # *h(s) = *V(s) + const (Recovers optimal value function + c)
-        self.h_phi = torch.squeeze(mlp(**args['h_args']))
+        self.h_phi = torch.squeeze(mlp(**args['h_args']), axis=-1)
 
     def forward(self, data):
         """
             Returns the estimated reward function / Advantage
-            estimate
+            estimate. Given by:
+
+            f(s, a, s') = g(s) + gamma * h(s') - h(s)
         """
         obs, obs_n = data
         f_thet_phi = self.g_theta(obs) + self.gamma * \
             self.h_phi(obs_n) - self.h_phi(obs)
 
         return f_thet_phi
+
+
+
+
+
+class Actor(nn.Module):
+    def __init__(self, **args):
+        super(Actor, self).__init__()
+
+    def forward(self, obs, ac=None):
+        """
+            Gives policy for given observations
+            and optionally actions log prob under that
+            policy
+        """
+        pi = self.sample_policy(obs)
+        log_p = None
+
+        if isinstance(self, CategoricalPolicy):
+            ac=ac.unsqueeze(-1)
+
+        if ac is not None:
+            log_p = self.log_p(pi, ac)
+        return pi, log_p
+
+
+class MLPGaussianPolicy(Actor):
+    """
+        Gaussian Policy for stochastic actions
+    """
+
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation=nn.Tanh, size=2):
+        super(MLPGaussianPolicy, self).__init__()
+
+        self.logits = mlp(obs_dim, hidden_sizes +
+                          [act_dim], activation, size=size)
+        log_std = -.5 * np.ones(act_dim, dtype=np.float32)
+        self.log_std = nn.Parameter(torch.as_tensor(log_std))
+
+    def sample_policy(self, obs):
+        """
+            Creates a normal distribution representing
+            the current policy which
+            if sampled, returns an action on the policy given the observation
+        """
+        mu = self.logits(obs)
+        pi = torch.distributions.Normal(loc=mu, scale=torch.exp(self.log_std))
+
+        return pi
+
+    @classmethod
+    def log_p(cls, pi, a):
+        """
+            The log probability of taken action
+            a in policy pi
+        """
+        return pi.log_prob(a).sum(axis=-1)  # Sum needed for Torch normal distr.
+
+
+class CategoricalPolicy(Actor):
+    """
+        Categorical Policy for discrete action spaces
+    """
+
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation=nn.Tanh, size=2):
+        super(CategoricalPolicy, self).__init__()
+
+        self.logits = mlp(obs_dim, hidden_sizes +
+                          [act_dim], activation, size=size)
+
+    def sample_policy(self, obs):
+        """
+            Get new policy
+        """
+        logits = self.logits(obs)
+        pi = torch.distributions.Categorical(logits=logits)
+
+        return pi
+
+    @classmethod
+    def log_p(cls, p, a):
+        """
+            Log probabilities of actions w.r.t pi
+        """
+
+        return p.log_prob(a)
+
+
+class MLPActor(nn.Module):
+    """
+        Agent actor Net
+    """
+
+    def __init__(self, obs_space, act_space, hidden_size=[32, 32], activation=nn.Tanh, size=2, **args):
+        super(MLPActor, self).__init__()
+
+        obs_dim = obs_space.shape[0]
+
+        discrete = True if isinstance(act_space, Discrete) else False
+        act_dim = act_space.n if discrete else act_space.shape[0]
+
+        if discrete:
+            self.pi = CategoricalPolicy(
+                obs_dim, act_dim, hidden_size, size=size, activation=activation)
+        else:
+            self.pi = MLPGaussianPolicy(
+                obs_dim, act_dim, hidden_size, activation=activation, size=size)
+
+        self.disc = Discriminator(
+            obs_dim, **args)
+
+    def step(self, obs):
+        """
+            Get distribution under current obs and action sample from pi
+        """
+        with torch.no_grad():
+            pi_new = self.pi.sample_policy(obs)
+            a = pi_new.sample()
+
+            log_p = self.pi.log_p(pi_new, a)
+
+        return a.numpy(), log_p.numpy()
+
+
+
