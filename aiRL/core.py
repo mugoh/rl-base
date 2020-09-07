@@ -72,7 +72,7 @@ class Discriminator(nn.Module):
         # *h(s) = *V(s) + const (Recovers optimal value function + c)
         self.h_phi = torch.squeeze(mlp(**args['h_args']), axis=-1)
 
-    def forward(self, data):
+    def forward(self, *data):
         """
             Returns the estimated reward function / Advantage
             estimate. Given by:

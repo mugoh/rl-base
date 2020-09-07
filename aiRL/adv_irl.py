@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+import torch.nn as nn
 
 class ReplayBuffer:
     """
@@ -67,7 +68,7 @@ class ReplayBuffer:
             in order: act, rew, obs, n_obs, dones, log_p
         """
 
-        lowest_iter = itr_limit * batch_size
+        lowest_iter = itr_limit * batch_size # Batch size makes 1 iter
         low_ = 0
         if self.ptr > lowest_iter:
             low_ = lowest_iter
@@ -97,7 +98,32 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
         Algorithm used: Soft PPO
 
         args: buffer_size:int(1e6), disc_lr: 2e-4,
+
+        Args:
+            entropy_reg (float): Entropy regularizer for Soft Ppo (SPPO)
+                Denoted :math: `\alpha`
+
+            max_kl (float): KL divergence regulator. Used for early stopping
+                when the KL between the new and old policy exceeds this
+                threshold we think is appropriate (.01 - .05)
+
+            clip_ratio (float): Clips the old policy objective.
+                Determines how far the new policy can go from the old
+                policy while still improving the objective
+
+            pi_lr (float): Learning rate for the policy
+
+            disc_lr (float): Learning rate for the discriminator
+
+            seed (int): Random seed generator
+
+            real_label (int): Label for expert data (1)
+
+            pi_label (int): Label for policy samples (0)
     """
+
+    torch.manual_seed(args[ 'seed' ])
+    np.random.seed(args[ 'seed' ])
 
     obs_space = env.observation_space
     act_space = env.action_space
@@ -116,7 +142,8 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
 
     pi_optimizer = optim.Adam(actor.pi.parameters(), args.get('pi_lr') or 1e-4)
     discr_optimizer = optim.Adam(
-        actor.disc.parameters(), args.get('disc_lr') or 1e-4)
+        actor.disc.parameters(), args.get('disc_lr') or 2e-4)
+    loss_criterion = nn.BCELoss()
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
     path = os.path.join('data', env.unwrapped.spec.id +
@@ -124,12 +151,124 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
 
     logger = SummaryWriter(log_dir=path)
 
+
+    def compute_pi_loss(log_p_old, adv_b, act_b, obs_b):
+        """
+            Pi loss
+
+            adv_b: Advantage estimate from the learned reward function
+        """
+
+        # returns new_pi_normal_distribution, logp_act
+        pi_new, log_p_ = actor.pi(obs_b, act_b)
+        log_p_ = log_p_.type(torch.float32)  # From torch.float64
+
+        pi_ratio = torch.exp(log_p_ - log_p_old)
+
+
+        # Soft PPO update - Encourages entropy in the policy
+
+        # i.e. Act as randomly as possibly while maximizing the objective
+        # Example case: pi might learn to take a certain action for a given
+        # state every time because it has some good reward, but forgo
+        # trying other actions which might have higher reward
+
+        # A_old_pi(s, a) = A(s, a) - entropy_reg * log pi_old(a|s)
+        adv_b = adv_b - entropy_reg * log_p_old
+
+        min_adv = torch.where(adv_b >= 0, (1 + clip_ratio)
+                              * adv_b, (1-clip_ratio) * adv_b)
+
+        pi_loss = -torch.mean(torch.min(pi_ratio * adv_b, min_adv))
+        kl = (log_p_old - log_p_).mean().item()
+        entropy = pi_new.entropy().mean().item()
+
+        return pi_loss, kl, entropy
+
+    def compute_disc_loss(traj, label, d_l_args=args):
+        """
+            Disciminator loss
+
+            log D_theta_phi (s, a, s') − log(1 − D_theta_phi (s, a, s'))
+            (Minimize likelohood of policy samples while increase likelihood
+            of expert demonstrations)
+
+            Args:
+                traj: (s, a, s') samples
+                label: Label for expert data or pi samples
+        """
+
+        # obs, obs_n, dones
+        # expert_data or pi_samples in traj
+
+        output = actor.disc(*traj).view(-1)
+
+        err_d = loss_criterion(output, label)
+
+        # Average output across the batch of the Discriminator
+        # For expert data,
+        # Should start at ~ 1 and converge to 0.5
+
+        # For sample data, should start at 0 and converge to 0.5
+        d_x = output.mean().item()
+
+
+        # Call err_demo.backward first!
+        return  d_x, err_d
+
+
+
+
     def update(epoch, train_args=args):
         """
             Perfroms gradient update on pi and discriminator
         """
         data = memory.sample_random(steps_per_epoch)
         act, rew, obs, obs_n, dones, log_p = data
+
+        batch_size = d_l_args['steps_per_epoch']
+        real_label = d_l_args['real_label']
+        pi_label = d_l_args['pi_label']
+
+        # loss before update
+        pi_loss_old, kl, entropy = compute_pi_loss(
+            log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
+
+        label = torch.full((batch_size,), real_label, dtype=torch.float32)
+
+        demo_info = compute_disc_loss({}, label=label)
+        pi_samples_info = compute_disc_loss({}, label.fill_(pi_label))
+
+
+
+        av_demo_output_old, err_demo_old = demo_info
+        av_pi_output_old, err_pi_samples_old = pi_samples_info
+
+        for i in range(train_args['disc_train_n_iters']):
+            # Train with expert demonstrations
+            # log(D(s, a, s'))
+
+            actor.disc.zero_grad()
+
+            av_demo_output, err_demo = compute_disc_loss(
+                {},
+                                                         label.fill_(real_label))
+
+            err_demo.backward()
+
+            # Train with policy samples
+            # - log(D(s, a, s'))
+            label.fill_(pi_label)
+            av_pi_output, err_pi_samples = compute_disc_loss({}, label)
+            err_pi_samples = -err_pi_samples
+
+            err_pi_samples.backward()
+
+            discr_optimizer.step()
+
+        for i in range(train_args['pi_train_n_iters']):
+            ...
+
 
     start_time = time.time()
     obs = env.reset()
