@@ -1,14 +1,24 @@
+"""AIRL"""
+
 import numpy as np
 import torch
 
 import torch.nn as nn
+from torch.utils.tensorboard import SummaryWriter
+
+import gym
+
+import time
+import os
+
+import core
+
 
 class ReplayBuffer:
     """
         Transitions buffer
         Stores transitions for a single episode
     """
-
     def __init__(self, act_dim, obs_dim, size=1000000):
 
         self.rewards = np.zeros([size], dtype=np.float32)
@@ -22,7 +32,7 @@ class ReplayBuffer:
         self.ptr, self.size = 0, 0
         self.max_size = size
 
-    def store(self, act, states, n_states,  rew, dones, log_p):
+    def store(self, act, states, n_states, rew, dones, log_p):
         """
             Store transitions
         """
@@ -45,20 +55,17 @@ class ReplayBuffer:
         """
         assert self.ptr >= batch_size
 
-        return (
-            torch.as_tensor(
-                self.actions[-batch_size:], dtype=torch.float32),
-            torch.as_tensor(
-                self.rewards[-batch_size:], dtype=torch.float32),
-            torch.as_tensor(
-                self.states[-batch_size:], dtype=torch.float32),
-            torch.as_tensor(
-                self.n_states[-batch_size:], dtype=torch.float32),
-            torch.as_tensor(
-                self.dones[-batch_size:], dtype=torch.float32),
-            torch.as_tensor(
-                self.log_prob[-batch_size:], dtype=torch.float32)
-        )
+        return (torch.as_tensor(self.actions[-batch_size:],
+                                dtype=torch.float32),
+                torch.as_tensor(self.rewards[-batch_size:],
+                                dtype=torch.float32),
+                torch.as_tensor(self.states[-batch_size:],
+                                dtype=torch.float32),
+                torch.as_tensor(self.n_states[-batch_size:],
+                                dtype=torch.float32),
+                torch.as_tensor(self.dones[-batch_size:], dtype=torch.float32),
+                torch.as_tensor(self.log_prob[-batch_size:],
+                                dtype=torch.float32))
 
     def sample_random(self, batch_size, itr_limit=20):
         """
@@ -68,31 +75,30 @@ class ReplayBuffer:
             in order: act, rew, obs, n_obs, dones, log_p
         """
 
-        lowest_iter = itr_limit * batch_size # Batch size makes 1 iter
+        lowest_iter = itr_limit * batch_size  # Batch size makes 1 iter
         low_ = 0
         if self.ptr > lowest_iter:
             low_ = lowest_iter
-        idx = np.random.randint(
-            low=self.ptr - low_, high=self.ptr, size=batch_size)
+        idx = np.random.randint(low=self.ptr - low_,
+                                high=self.ptr,
+                                size=batch_size)
 
-        return (
-            torch.as_tensor(
-                self.actions[idx], dtype=torch.float32),
-            torch.as_tensor(
-                self.rewards[idx], dtype=torch.float32),
-            torch.as_tensor(
-                self.states[idx], dtype=torch.float32),
-            torch.as_tensor(
-                self.n_states[idx], dtype=torch.float32),
-            torch.as_tensor(
-                self.dones[idx], dtype=torch.float32),
-            torch.as_tensor(
-                self.log_prob[idx], dtype=torch.float32)
-
-        )
+        return (torch.as_tensor(self.actions[idx], dtype=torch.float32),
+                torch.as_tensor(self.rewards[idx], dtype=torch.float32),
+                torch.as_tensor(self.states[idx], dtype=torch.float32),
+                torch.as_tensor(self.n_states[idx], dtype=torch.float32),
+                torch.as_tensor(self.dones[idx], dtype=torch.float32),
+                torch.as_tensor(self.log_prob[idx], dtype=torch.float32))
 
 
-def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_len=1000, clip_ratio=.2, entropy_reg=.1, **args):
+def airl(env,
+         actor_class=core.MLPActor,
+         n_epochs=50,
+         steps_per_epoch=5000,
+         max_eps_len=1000,
+         clip_ratio=.2,
+         entropy_reg=.1,
+         **args):
     """
         Learning Robust Rewards with Adversarial Inversere RL
         Algorithm used: Soft PPO
@@ -122,37 +128,36 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
             pi_label (int): Label for policy samples (0)
     """
 
-    torch.manual_seed(args[ 'seed' ])
-    np.random.seed(args[ 'seed' ])
+    torch.manual_seed(args['seed'])
+    np.random.seed(args['seed'])
 
     obs_space = env.observation_space
     act_space = env.action_space
 
-    act_dim = act_space.shape[0] if not isinstance(act_space,
-                                                   gym.spaces.Discrete) else act_space.n
+    act_dim = act_space.shape[0] if not isinstance(
+        act_space, gym.spaces.Discrete) else act_space.n
     obs_dim = obs_space.shape[0]
 
     actor = actor_class(obs_space=obs_space,
-                        act_space=act_space, **args['ac_args'])
+                        act_space=act_space,
+                        **args['ac_args'])
     params = [core.count(module) for module in (actor.pi, actor.disc)]
-    print(f'\nParameters\npi: {params[0]}  discr: { params[1] }')
+    #print(f'\nParameters\npi: {params[0]}  discr: { params[1] }')
 
-    memory = ReplayBuffer(act_dim, obs_dim, max_size=args['buffer_size']
-                          )
+    memory = ReplayBuffer(act_dim, obs_dim, size=args['buffer_size'])
 
     pi_optimizer = optim.Adam(actor.pi.parameters(), args.get('pi_lr') or 1e-4)
-    discr_optimizer = optim.Adam(
-        actor.disc.parameters(), args.get('disc_lr') or 2e-4)
+    discr_optimizer = optim.Adam(actor.disc.parameters(),
+                                 args.get('disc_lr') or 2e-4)
     loss_criterion = nn.BCELoss()
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
-    path = os.path.join('data', env.unwrapped.spec.id +
-                        args.get('env_name', '') + '_' + run_t)
+    path = os.path.join(
+        'data', env.unwrapped.spec.id + args.get('env_name', '') + '_' + run_t)
 
     logger = SummaryWriter(log_dir=path)
 
-
-    def compute_pi_loss(log_p_old, adv_b, act_b, obs_b):
+    def compute_pi_loss(log_p_old, act_b, obs_b, obs_n_b, dones_b):
         """
             Pi loss
 
@@ -163,8 +168,10 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
         pi_new, log_p_ = actor.pi(obs_b, act_b)
         log_p_ = log_p_.type(torch.float32)  # From torch.float64
 
-        pi_ratio = torch.exp(log_p_ - log_p_old)
+        # Predict adv using learned reward function
+        adv_b = actor.disc(obs_b, obs_n_b, dones_b)
 
+        pi_ratio = torch.exp(log_p_ - log_p_old)
 
         # Soft PPO update - Encourages entropy in the policy
 
@@ -176,8 +183,8 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
         # A_old_pi(s, a) = A(s, a) - entropy_reg * log pi_old(a|s)
         adv_b = adv_b - entropy_reg * log_p_old
 
-        min_adv = torch.where(adv_b >= 0, (1 + clip_ratio)
-                              * adv_b, (1-clip_ratio) * adv_b)
+        min_adv = torch.where(adv_b >= 0, (1 + clip_ratio) * adv_b,
+                              (1 - clip_ratio) * adv_b)
 
         pi_loss = -torch.mean(torch.min(pi_ratio * adv_b, min_adv))
         kl = (log_p_old - log_p_).mean().item()
@@ -185,13 +192,20 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
 
         return pi_loss, kl, entropy
 
-    def compute_disc_loss(traj, label, d_l_args=args):
+    def compute_disc_loss(traj, label, log_p, d_l_args=args):
         """
             Disciminator loss
 
-            log D_theta_phi (s, a, s') − log(1 − D_theta_phi (s, a, s'))
+            log D_theta_phi (s, a, s') − log(1 − D_theta_phi (s, a, s')) ... (1)
+
             (Minimize likelohood of policy samples while increase likelihood
             of expert demonstrations)
+
+            D_theta_phi = exp(f(s, a, s')) / [exp(f(s, a, s')) + pi(a|s)]
+
+            Substitute this in eq (1):
+                        = f(s, a, s') - log p(a|s)
+
 
             Args:
                 traj: (s, a, s') samples
@@ -201,7 +215,7 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
         # obs, obs_n, dones
         # expert_data or pi_samples in traj
 
-        output = actor.disc(*traj).view(-1)
+        output = actor.disc(*traj).view(-1) - log_p
 
         err_d = loss_criterion(output, label)
 
@@ -212,12 +226,8 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
         # For sample data, should start at 0 and converge to 0.5
         d_x = output.mean().item()
 
-
         # Call err_demo.backward first!
-        return  d_x, err_d
-
-
-
+        return d_x, err_d
 
     def update(epoch, train_args=args):
         """
@@ -226,20 +236,21 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
         data = memory.sample_random(steps_per_epoch)
         act, rew, obs, obs_n, dones, log_p = data
 
-        batch_size = d_l_args['steps_per_epoch']
-        real_label = d_l_args['real_label']
-        pi_label = d_l_args['pi_label']
+        batch_size = train_args['steps_per_epoch']
+        real_label = train_args['real_label']
+        pi_label = train_args['pi_label']
 
         # loss before update
-        pi_loss_old, kl, entropy = compute_pi_loss(
-            log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
+        pi_loss_old, kl, entropy = compute_pi_loss(log_p_old=log_p_old,
+                                                   obs_b=obs,
+                                                   obs_n_b=obs_n,
+                                                   dones_b=dones,
+                                                   act_b=act)
 
-        label = torch.full((batch_size,), real_label, dtype=torch.float32)
+        label = torch.full((batch_size, ), real_label, dtype=torch.float32)
 
-        demo_info = compute_disc_loss({}, label=label)
-        pi_samples_info = compute_disc_loss({}, label.fill_(pi_label))
-
-
+        demo_info = compute_disc_loss({}, label=label, log_p)
+        pi_samples_info = compute_disc_loss({}, label.fill_(pi_label), log_p)
 
         av_demo_output_old, err_demo_old = demo_info
         av_pi_output_old, err_pi_samples_old = pi_samples_info
@@ -251,24 +262,45 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
             actor.disc.zero_grad()
 
             av_demo_output, err_demo = compute_disc_loss(
-                {},
-                                                         label.fill_(real_label))
+                {}, label.fill_(real_label), log_p)
 
-            err_demo.backward()
+            # err_demo.backward()
+            # works too, but compute backprop once
+            # See "disc_loss_update_test.ipynb"
 
             # Train with policy samples
             # - log(D(s, a, s'))
             label.fill_(pi_label)
-            av_pi_output, err_pi_samples = compute_disc_loss({}, label)
-            err_pi_samples = -err_pi_samples
+            av_pi_output, err_pi_samples = compute_disc_loss({}, label, log_p)
+            err_pi_samples = err_pi_samples
 
-            err_pi_samples.backward()
+            # err_pi_samples.backward()
+            loss = err_demo - err_pi_samples
+            loss.backward()
 
             discr_optimizer.step()
 
-        for i in range(train_args['pi_train_n_iters']):
-            ...
+        err_demo = err_demo.item()
+        err_pi_samples = err_pi_samples.item()
+        disc_loss = loss.item()
 
+        for i in range(train_args['pi_train_n_iters']):
+            pi_optimizer.zero_grad()
+
+            pi_loss, kl, entropy = compute_pi_loss(log_p_old=log_p_old,
+                                                   obs_b=obs,
+                                                   obs_n_b=obs_n,
+                                                   dones_b=dones,
+                                                   act_b=act)
+            if kl > 1.5 * train_args['max_kl']:  # Early stop for high Kl
+                print('Max kl reached: ', kl, '  iter: ', i)
+                break
+
+            pi_loss.backward()
+            pi_optimizer.step()
+
+        logger.add_scalar('PiStopIter', i, epoch)
+        pi_loss = pi_loss.item()
 
     start_time = time.time()
     obs = env.reset()
@@ -284,7 +316,7 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
             eps_len += 1
             eps_ret += rew
 
-            memory.store(a, obs, obs_n,  rew, done, log_p)
+            memory.store(a, obs, obs_n, rew, done, log_p)
             obs = obs_n
 
             terminal = done or eps_len == max_eps_len
@@ -294,7 +326,7 @@ def airl(env, actor=core.MLPActor, n_epochs=50, steps_per_epoch=5000, max_eps_le
                 if terminal:
                     # only log these for terminals
                     eps_len_logs += [eps_len]
-                    eps_ret_log += [eps_ret]
+                    eps_ret_logs += [eps_ret]
 
                 obs = env.reset()
                 eps_len, eps_ret = 0, 0
