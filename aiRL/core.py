@@ -9,7 +9,7 @@ import torch
 
 import numpy as np
 
-from gym.utils import Discrete
+from gym.spaces import Discrete
 
 
 def count(module):
@@ -20,7 +20,11 @@ def count(module):
     return np.sum([np.prod(p.shape) for p in module.parameters()])
 
 
-def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
+def mlp(x,
+        hidden_layers,
+        activation=nn.Tanh,
+        size=2,
+        output_activation=nn.Identity):
     """
         Multi-layer perceptron
     """
@@ -60,7 +64,6 @@ class Discriminator(nn.Module):
         f_theta_phi = g_theta(s) + gamma * h_phi(s') - h_phi(s)
         (Essentially an advantage estimate)
     """
-
     def __init__(self, obs_dim, gamma=.99, **args):
         super(Discriminator, self).__init__()
         self.gamma = gamma
@@ -90,8 +93,21 @@ class Discriminator(nn.Module):
 
         return f_thet_phi
 
+    def discr_value(self, log_p, *data):
+        """
+            Calculates the disctiminator output
+                D = exp(f(s, a, s')) / [exp(f(s, a, s')) + pi(a|s)]
+        """
 
+        adv = self(*data)
 
+        exp_adv = torch.exp(adv)
+        value = exp_adv / (exp_adv + torch.exp(log_p))
+        value2 = adv / (adv + log_p)
+
+        print('\n\nDisc value - value2:  ', (value - value2.mean().item()))
+
+        return value
 
 
 class Actor(nn.Module):
@@ -108,7 +124,7 @@ class Actor(nn.Module):
         log_p = None
 
         if isinstance(self, CategoricalPolicy):
-            ac=ac.unsqueeze(-1)
+            ac = ac.unsqueeze(-1)
 
         if ac is not None:
             log_p = self.log_p(pi, ac)
@@ -119,12 +135,18 @@ class MLPGaussianPolicy(Actor):
     """
         Gaussian Policy for stochastic actions
     """
-
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation=nn.Tanh, size=2):
+    def __init__(self,
+                 obs_dim,
+                 act_dim,
+                 hidden_sizes,
+                 activation=nn.Tanh,
+                 size=2):
         super(MLPGaussianPolicy, self).__init__()
 
-        self.logits = mlp(obs_dim, hidden_sizes +
-                          [act_dim], activation, size=size)
+        self.logits = mlp(obs_dim,
+                          hidden_sizes + [act_dim],
+                          activation,
+                          size=size)
         log_std = -.5 * np.ones(act_dim, dtype=np.float32)
         self.log_std = nn.Parameter(torch.as_tensor(log_std))
 
@@ -145,19 +167,26 @@ class MLPGaussianPolicy(Actor):
             The log probability of taken action
             a in policy pi
         """
-        return pi.log_prob(a).sum(axis=-1)  # Sum needed for Torch normal distr.
+        return pi.log_prob(a).sum(
+            axis=-1)  # Sum needed for Torch normal distr.
 
 
 class CategoricalPolicy(Actor):
     """
         Categorical Policy for discrete action spaces
     """
-
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation=nn.Tanh, size=2):
+    def __init__(self,
+                 obs_dim,
+                 act_dim,
+                 hidden_sizes,
+                 activation=nn.Tanh,
+                 size=2):
         super(CategoricalPolicy, self).__init__()
 
-        self.logits = mlp(obs_dim, hidden_sizes +
-                          [act_dim], activation, size=size)
+        self.logits = mlp(obs_dim,
+                          hidden_sizes + [act_dim],
+                          activation,
+                          size=size)
 
     def sample_policy(self, obs):
         """
@@ -181,8 +210,13 @@ class MLPActor(nn.Module):
     """
         Agent actor Net
     """
-
-    def __init__(self, obs_space, act_space, hidden_size=[32, 32], activation=nn.Tanh, size=2, **args):
+    def __init__(self,
+                 obs_space,
+                 act_space,
+                 hidden_size=[32, 32],
+                 activation=nn.Tanh,
+                 size=2,
+                 **args):
         super(MLPActor, self).__init__()
 
         obs_dim = obs_space.shape[0]
@@ -191,14 +225,19 @@ class MLPActor(nn.Module):
         act_dim = act_space.n if discrete else act_space.shape[0]
 
         if discrete:
-            self.pi = CategoricalPolicy(
-                obs_dim, act_dim, hidden_size, size=size, activation=activation)
+            self.pi = CategoricalPolicy(obs_dim,
+                                        act_dim,
+                                        hidden_size,
+                                        size=size,
+                                        activation=activation)
         else:
-            self.pi = MLPGaussianPolicy(
-                obs_dim, act_dim, hidden_size, activation=activation, size=size)
+            self.pi = MLPGaussianPolicy(obs_dim,
+                                        act_dim,
+                                        hidden_size,
+                                        activation=activation,
+                                        size=size)
 
-        self.disc = Discriminator(
-            obs_dim, **args)
+        self.disc = Discriminator(obs_dim, **args)
 
     def step(self, obs):
         """
@@ -211,6 +250,3 @@ class MLPActor(nn.Module):
             log_p = self.pi.log_p(pi_new, a)
 
         return a.numpy(), log_p.numpy()
-
-
-
