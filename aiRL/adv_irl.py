@@ -91,6 +91,82 @@ class ReplayBuffer:
                 torch.as_tensor(self.log_prob[idx], dtype=torch.float32))
 
 
+class ExpertBuffer():
+    """
+        Expert demonstrations Buffer
+
+        Args:
+            path (str): Path to the expert data file
+
+    Loading the data works with files written using:
+        np.savez(file_path, **{key: value})
+
+    So the loaded file can be accessed again by key
+        value = np.load(file_path)[key]
+
+        data format: { 'iteration_count': transitions }
+            Where transitions is a key,value pair of
+            expert data samples of size(-1)  `steps_per_epoch`
+    """
+    def __init__(self, path):
+        data_file = np.load(path, allow_pickle=True)
+        self.load_rollouts(data_file)
+
+        self.ptr = 0
+
+    def load_rollouts(self, data_file, iter_no):
+        """
+            Convert a list of rollout dictionaries into
+            separate arrays concatenated across the arrays
+            rollouts
+        """
+        # get all iterations transitions
+        data = [traj for traj in data_file.values()]
+
+        #  traj in x batch arrays. Unroll to 1
+        data = np.concatenate(data)
+
+        self.obs = np.concatenate(path['observation'] for path in data)
+        self.obs_n = np.concatenate(path['next_observation'] for path in data)
+        self.dones = np.concatenate(path['terminal'] for path in data)
+        self.act = np.concatenate(path['action'] for path in data)
+
+        self.size = dones.shape[0]
+
+    def get_random(self, batch_size):
+        """
+            Fetch random expert demonstrations of size `batch_size`
+
+            Returns:
+            obs, obs_n, dones
+        """
+        idx = np.random.randint(self.size, size=batch_size)
+
+        return (
+            torch.as_tensor(self.obs[idx], dtype=torch.float32),
+            # torch.as_tensor(self.act[idx], dtype=torch.float32),
+            torch.as_tensor(self.obs_n[idx], dtype=torch.float32),
+            torch.as_tensor(self.dones[idx], dtype=torch.float32))
+
+    def get(self, batch_size):
+        """
+            Samples expert trajectories by order
+            of saving iteration
+
+            Returns:
+            obs, obs_n, dones
+        """
+        idx = slice(self.ptr, batch_size)
+
+        self.ptr = (self.ptr + 1) * batch_size
+
+        return (
+            torch.as_tensor(self.obs[idx], dtype=torch.float32),
+            # torch.as_tensor(self.act[idx], dtype=torch.float32),
+            torch.as_tensor(self.obs_n[idx], dtype=torch.float32),
+            torch.as_tensor(self.dones[idx], dtype=torch.float32))
+
+
 def airl(env,
          actor_class=core.MLPActor,
          n_epochs=50,
@@ -142,7 +218,7 @@ def airl(env,
                         act_space=act_space,
                         **args['ac_args'])
     params = [core.count(module) for module in (actor.pi, actor.disc)]
-    #print(f'\nParameters\npi: {params[0]}  discr: { params[1] }')
+    print(f'\nParameters\npi: {params[0]}  discr: { params[1] }')
 
     memory = ReplayBuffer(act_dim, obs_dim, size=args['buffer_size'])
 
@@ -161,7 +237,9 @@ def airl(env,
         """
             Pi loss
 
-            adv_b: Advantage estimate from the learned reward function
+            obs_b, obs_n_b, dones_b are expert demonstrations. They
+            will be used in finding `adv_b` - the Advantage estimate
+            from the learned reward function
         """
 
         # returns new_pi_normal_distribution, logp_act
@@ -192,7 +270,7 @@ def airl(env,
 
         return pi_loss, kl, entropy
 
-    def compute_disc_loss(traj, label, log_p, d_l_args=args):
+    def compute_disc_loss(traj, label, d_l_args=args):
         """
             Disciminator loss
 
@@ -215,7 +293,7 @@ def airl(env,
         # obs, obs_n, dones
         # expert_data or pi_samples in traj
 
-        output = actor.disc(*traj).view(-1) - log_p
+        output = actor.disc(*traj).view(-1)
 
         err_d = loss_criterion(output, label)
 
@@ -233,7 +311,7 @@ def airl(env,
         """
             Perfroms gradient update on pi and discriminator
         """
-        data = memory.sample_random(steps_per_epoch)
+        data = memory.sample_recent(batch_size)
         act, rew, obs, obs_n, dones, log_p = data
 
         batch_size = train_args['steps_per_epoch']
@@ -249,8 +327,8 @@ def airl(env,
 
         label = torch.full((batch_size, ), real_label, dtype=torch.float32)
 
-        demo_info = compute_disc_loss({}, label=label, log_p)
-        pi_samples_info = compute_disc_loss({}, label.fill_(pi_label), log_p)
+        demo_info = compute_disc_loss({}, label=label)
+        pi_samples_info = compute_disc_loss({}, label.fill_(pi_label))
 
         av_demo_output_old, err_demo_old = demo_info
         av_pi_output_old, err_pi_samples_old = pi_samples_info
@@ -262,7 +340,7 @@ def airl(env,
             actor.disc.zero_grad()
 
             av_demo_output, err_demo = compute_disc_loss(
-                {}, label.fill_(real_label), log_p)
+                {}, label.fill_(real_label))
 
             # err_demo.backward()
             # works too, but compute backprop once
@@ -271,7 +349,7 @@ def airl(env,
             # Train with policy samples
             # - log(D(s, a, s'))
             label.fill_(pi_label)
-            av_pi_output, err_pi_samples = compute_disc_loss({}, label, log_p)
+            av_pi_output, err_pi_samples = compute_disc_loss({}, label)
             err_pi_samples = err_pi_samples
 
             # err_pi_samples.backward()
