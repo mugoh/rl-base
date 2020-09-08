@@ -380,7 +380,9 @@ def airl(env,
 
             # err_pi_samples.backward()
             loss = err_demo - err_pi_samples
-            loss.backward()
+
+            # - To turn minimization to Maximization of the objective
+            -loss.backward()
 
             discr_optimizer.step()
 
