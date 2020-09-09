@@ -70,8 +70,8 @@ def main(**args):
 
     all_args = {
         'ac_args': ac_args,
-        'pi_lr': 1e-4,
-        'disc_lr': 1e-4,
+        'pi_lr': 3e-4,
+        'disc_lr': 2e-4,
         'gamma': .99,
         'buffer_size': int(1e6),
         **agent_args,

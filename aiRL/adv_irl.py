@@ -260,6 +260,13 @@ def airl(env,
 
     logger = SummaryWriter(log_dir=path)
 
+    # Hold epoch losses for logging
+    pi_losses, disc_losses, delta_disc_logs, delta_pi_logs = [], [], [], []
+    pi_kl = []
+    disc_logs = []
+    disc_outputs = []  # Discriminator Predictions
+    first_run_ret = None
+
     def compute_pi_loss(log_p_old, act_b, *expert_demos):
         """
             Pi loss
@@ -326,11 +333,7 @@ def airl(env,
 
         output = actor.disc.discr_value(log_p, *traj).view(-1)
 
-        try:
-            err_d = loss_criterion(output, label)
-        except RuntimeError:
-            import pdb
-            pdb.set_trace()
+        err_d = loss_criterion(output, label)
 
         # Average output across the batch of the Discriminator
         # For expert data,
@@ -370,6 +373,8 @@ def airl(env,
 
         av_demo_output_old, err_demo_old = demo_info
         av_pi_output_old, err_pi_samples_old = pi_samples_info
+
+        disc_loss_old = (err_demo_old - err_pi_samples_old).mean().item()
 
         for i in range(train_args['disc_train_n_iters']):
             # Train with expert demonstrations
@@ -415,7 +420,32 @@ def airl(env,
             pi_optimizer.step()
 
         logger.add_scalar('PiStopIter', i, epoch)
+
         pi_loss = pi_loss.item()
+
+        pi_losses.append(pi_loss)
+        pi_kl.append(kl)
+        disc_logs.append(disc_loss)
+        disc_outputs.append((av_demo_output, av_pi_output))
+
+        delta_disc_loss = disc_loss_old - disc_loss
+        delta_pi_loss = pi_loss_old.item() - pi_loss
+
+        delta_disc_logs.append(delta_disc_loss)
+        delta_pi_logs.append(delta_pi_loss)
+
+        logger.add_scalar('loss/pi', pi_loss, epoch)
+        logger.add_scalar('loss/D', disc_loss, epoch)
+        logger.add_scalar('loss/D[demo]', err_demo, epoch)
+        logger.add_scalar('loss/D[pi]', err_pi_samples, epoch)
+
+        logger.add_scalar('loss/Delta-Pi', delta_pi_loss, epoch)
+        logger.add_scalar('loss/Delta-Disc', delta_disc_loss, epoch)
+
+        logger.add_scalar('Disc-Output/Expert', av_demo_output, epoch)
+        logger.add_scalar('Disc-Output/LearnedPolicy', av_pi_output, epoch)
+
+        logger.add_scalar('Kl', kl, epoch)
 
     start_time = time.time()
     obs = env.reset()
@@ -448,4 +478,54 @@ def airl(env,
 
         update(t + 1)
 
-        # Perform logging
+        # logs
+        # =====
+        l_t = t + 1
+
+        RunTime = time.time() - start_time
+        AverageEpisodeLen = np.mean(eps_len_logs)
+
+        logger.add_scalar('AvEpsLen', AverageEpisodeLen, l_t)
+        # MaxEpisodeLen = np.max(eps_len_logs)
+        # MinEpsiodeLen = np.min(eps_len_logs)
+        AverageEpsReturn = np.mean(eps_ret_logs)
+        MaxEpsReturn = np.max(eps_ret_logs)
+        MinEpsReturn = np.min(eps_ret_logs)
+
+        logger.add_scalar('EpsReturn/Max', MaxEpsReturn, l_t)
+        logger.add_scalar('EpsReturn/Min', MinEpsReturn, l_t)
+        logger.add_scalar('EpsReturn/Average', AverageEpsReturn, l_t)
+
+        # Retrieved by index, not time step ( no +1 )
+        Pi_Loss = pi_losses[t]
+        Disc_loss = disc_logs[t]
+        Kl = pi_kl[t]
+        delta_disc_loss = delta_disc_logs[t]
+        delta_pi_loss = delta_pi_logs[t]
+        disc_outs = disc_outputs[t]
+
+        if t == 0:
+            first_run_ret = AverageEpsReturn
+
+        all_logs = {
+            'AverageEpsReturn': AverageEpsReturn,
+            'MinEpsReturn': MinEpsReturn,
+            'MaxEpsReturn': MaxEpsReturn,
+            'KL': Kl,
+            'AverageEpisodeLen': AverageEpisodeLen,
+            'Pi_Loss': Pi_Loss,
+            'Disc_loss': Disc_loss,
+            'FirstEpochAvReturn': first_run_ret,
+            'RunTime': RunTime,
+            'Delta-Pi': delta_pi_loss,
+            'Delta-D': delta_disc_loss,
+            'AvDisc-Demo-Output': disc_outs[0],
+            'AvDisc-PiSamples-Output': disc_outs[1]
+        }
+
+        print('\n', t + 1)
+        print('', '-' * 35)
+        for k, v in all_logs.items():
+            print(k, v)
+
+        print('\n\n\n')
