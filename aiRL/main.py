@@ -3,7 +3,9 @@
 from adv_irl import airl
 
 from torch import nn
+
 import click
+import gym
 
 
 @click.command()
@@ -15,17 +17,22 @@ import click
               type=str,
               default='',
               help="Name to assign log data")
+@click.option('--expert_data_path',
+              '-demos',
+              type=str,
+              default='.data/expert_data_13-08-2020_16-09-18.npz',
+              help="Path to expert data file")
 @click.option('--epochs', '-ep', type=int, default=100)
-@click.option('--steps_per_epoch', '-spe', type=int, default=10000)
+@click.option('--steps_per_epoch', '-spe', type=int, default=1000)
 @click.option('--max_eps_len', '-ep_len', type=int)
 @click.option('--pi_learning_rate', '-pi_lr', type=float, default=1e-4)
 @click.option('--disc_learning_rate', '-d_lr', type=float, default=2e-4)
+@click.option('--seed', type=int, default=1)
 def main(**args):
     """
         User interaction & entry
     """
-    #env = gym.make('HalfCheetah-v2')
-    print(args)
+    env = gym.make(args.pop('env'))
 
     ac_args = {'hidden_size': [64, 64], 'size': 2}
 
@@ -47,8 +54,8 @@ def main(**args):
 
     train_args = {
         'pi_train_n_iters': 80,
-        'disc_train_n_iters': 80,
-        'max_kl': .01,
+        'disc_train_n_iters': 40,
+        'max_kl': 5,
         'entropy_reg': .1,
         'clip_ratio': .2,
         'max_eps_len': 150,
@@ -61,17 +68,19 @@ def main(**args):
         'steps_per_epoch': 10000
     }
 
-    args = {
+    all_args = {
         'ac_args': ac_args,
         'pi_lr': 1e-4,
-        'disc_lr': 2e-4,
+        'disc_lr': 1e-4,
         'gamma': .99,
         'buffer_size': int(1e6),
         **agent_args,
-        **train_args
+        **train_args,
+        **{k: v
+           for k, v in args.items() if v}
     }
 
-    # airl(env, **args)
+    airl(env, **all_args)
 
 
 if __name__ == '__main__':

@@ -6,12 +6,12 @@ Big Qs:
     without being a function of the action (state only)
 """
 
-import numpy as np
 import torch
-
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
+import torch.optim as optim
 
+import numpy as np
 import gym
 
 import time
@@ -127,7 +127,7 @@ class ExpertBuffer():
 
         self.ptr = 0
 
-    def load_rollouts(self, data_file, iter_no):
+    def load_rollouts(self, data_file):
         """
             Convert a list of rollout dictionaries into
             separate arrays concatenated across the arrays
@@ -139,12 +139,12 @@ class ExpertBuffer():
         #  traj in x batch arrays. Unroll to 1
         data = np.concatenate(data)
 
-        self.obs = np.concatenate(path['observation'] for path in data)
-        self.obs_n = np.concatenate(path['next_observation'] for path in data)
-        self.dones = np.concatenate(path['terminal'] for path in data)
-        # self.act = np.concatenate(path['action'] for path in data)
+        self.obs = np.concatenate([path['observation'] for path in data])
+        self.obs_n = np.concatenate(
+            [path['next_observation'] for path in data])
+        self.dones = np.concatenate([path['terminal'] for path in data])
 
-        self.size = dones.shape[0]
+        self.size = self.dones.shape[0]
 
     def get_random(self, batch_size):
         """
@@ -169,7 +169,10 @@ class ExpertBuffer():
             Returns:
             obs, obs_n, dones
         """
-        idx = slice(self.ptr, batch_size)
+        if self.ptr + batch_size > self.size:
+            self.ptr = 0
+
+        idx = slice(self.ptr, self.ptr + batch_size)
 
         self.ptr = ((self.ptr + 1) * batch_size) % self.size
 
@@ -233,8 +236,12 @@ def airl(env,
     actor = actor_class(obs_space=obs_space,
                         act_space=act_space,
                         **args['ac_args'])
-    params = [core.count(module) for module in (actor.pi, actor.disc)]
-    # print(f'\nParameters\npi: {params[0]}  discr: { params[1] }')
+    params = [
+        core.count(module) for module in (actor.pi, actor.disc,
+                                          actor.disc.g_theta, actor.disc.h_phi)
+    ]
+    print(f'\nParameters\npi: {params[0]}  ' +
+          f'discr: { params[1] } [h: {params[2]}] [g: {params[3]}]')
 
     memory = ReplayBuffer(act_dim,
                           obs_dim,
@@ -253,7 +260,7 @@ def airl(env,
 
     logger = SummaryWriter(log_dir=path)
 
-    def compute_pi_loss(log_p_old, act_b, obs_b, obs_n_b, dones_b):
+    def compute_pi_loss(log_p_old, act_b, *expert_demos):
         """
             Pi loss
 
@@ -261,6 +268,7 @@ def airl(env,
             will be used in finding `adv_b` - the Advantage estimate
             from the learned reward function
         """
+        obs_b, obs_n_b, dones_b = expert_demos
 
         # returns new_pi_normal_distribution, logp_act
         pi_new, log_p_ = actor.pi(obs_b, act_b)
@@ -318,7 +326,11 @@ def airl(env,
 
         output = actor.disc.discr_value(log_p, *traj).view(-1)
 
-        err_d = loss_criterion(output, label)
+        try:
+            err_d = loss_criterion(output, label)
+        except RuntimeError:
+            import pdb
+            pdb.set_trace()
 
         # Average output across the batch of the Discriminator
         # For expert data,
@@ -328,13 +340,15 @@ def airl(env,
         d_x = output.mean().item()
 
         # Call err_demo.backward first!
-        return d_x, err_d
+        return d_x, -err_d
 
     def update(epoch, train_args=args):
         """
             Perfroms gradient update on pi and discriminator
         """
-        batch_size = train_args['steps_per_epoch']
+        torch.autograd.set_detect_anomaly(True)
+
+        batch_size = steps_per_epoch
         real_label = train_args['real_label']
         pi_label = train_args['pi_label']
 
@@ -345,15 +359,14 @@ def airl(env,
         exp_data = memory.expt_buff.get(batch_size)
 
         # loss before update
-        pi_loss_old, kl, entropy = compute_pi_loss(log_p_old=log_p_old,
-                                                   act_b=act,
-                                                   *exp_data)
+        pi_loss_old, kl, entropy = compute_pi_loss(log_p, act, *exp_data)
 
         label = torch.full((batch_size, ), real_label, dtype=torch.float32)
 
-        demo_info = compute_disc_loss(*exp_data, log_p, label=label)
-        pi_samples_info = compute_disc_loss(*sample_disc_data, log_p,
-                                            label.fill_(pi_label))
+        demo_info = compute_disc_loss(*exp_data, log_p=log_p, label=label)
+        pi_samples_info = compute_disc_loss(*sample_disc_data,
+                                            log_p=log_p,
+                                            label=label.fill_(pi_label))
 
         av_demo_output_old, err_demo_old = demo_info
         av_pi_output_old, err_pi_samples_old = pi_samples_info
@@ -365,24 +378,24 @@ def airl(env,
             actor.disc.zero_grad()
 
             av_demo_output, err_demo = compute_disc_loss(
-                *exp_data, log_p, label.fill_(real_label))
+                *exp_data, log_p=log_p, label=label.fill_(real_label))
 
-            # err_demo.backward()
+            err_demo.backward()
             # works too, but compute backprop once
             # See "disc_loss_update_test.ipynb"
 
             # Train with policy samples
             # - log(D(s, a, s'))
             label.fill_(pi_label)
-            av_pi_output, err_pi_samples = compute_disc_loss(
-                *sample_disc_data, log_p, label)
-            err_pi_samples = err_pi_samples
+            av_pi_output, err_pi_samples = compute_disc_loss(*sample_disc_data,
+                                                             log_p=log_p,
+                                                             label=label)
 
-            # err_pi_samples.backward()
-            loss = err_demo - err_pi_samples
+            err_pi_samples.backward()
+            loss = err_demo.mean() - err_pi_samples.mean()
 
             # - To turn minimization to Maximization of the objective
-            -loss.backward()
+            #-loss.backward()
 
             discr_optimizer.step()
 
@@ -393,9 +406,7 @@ def airl(env,
         for i in range(train_args['pi_train_n_iters']):
             pi_optimizer.zero_grad()
 
-            pi_loss, kl, entropy = compute_pi_loss(log_p_old=log_p_old,
-                                                   act_b=act,
-                                                   *exp_data)
+            pi_loss, kl, entropy = compute_pi_loss(log_p, act, *exp_data)
             if kl > 1.5 * train_args['max_kl']:  # Early stop for high Kl
                 print('Max kl reached: ', kl, '  iter: ', i)
                 break

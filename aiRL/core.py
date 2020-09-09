@@ -11,6 +11,8 @@ import numpy as np
 
 from gym.spaces import Discrete
 
+EPS = 1e-8
+
 
 def count(module):
     """
@@ -36,7 +38,10 @@ def mlp(x,
     for size in hidden_layers[:-1]:
         layer = nn.Linear(x, size)
         net_layers.append(layer)
-        net_layers.append(activation())
+        if activation.__name__ == 'ReLU':
+            net_layers.append(activation(False))
+        else:
+            net_layers.append(activation())
         x = size
 
     net_layers.append(nn.Linear(x, hidden_layers[-1]))
@@ -70,10 +75,11 @@ class Discriminator(nn.Module):
 
         # *g(s) = *r(s) + const
         #  g(s) recovers the optimal reward function +  c
-        self.g_theta = torch.squeeze(mlp(obs_dim, **args['g_args']), axis=-1)
+        self.g_theta = mlp(obs_dim, **args['g_args'])
 
         # *h(s) = *V(s) + const (Recovers optimal value function + c)
-        self.h_phi = torch.squeeze(mlp(**args['h_args']), axis=-1)
+        self.h_phi = mlp(obs_dim, **args['h_args'])
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, *data):
         """
@@ -88,8 +94,13 @@ class Discriminator(nn.Module):
             data    | [obs, obs_n, dones]
         """
         obs, obs_n, dones = data
-        f_thet_phi = self.g_theta(obs) + self.gamma * \
-            (1 - dones) * self.h_phi(obs_n) - self.h_phi(obs)
+        g_s = torch.squeeze(self.g_theta(obs), axis=-1)
+
+        shaping_term = self.gamma * \
+            (1 - dones) * torch.squeeze(self.h_phi(obs_n), -1) - \
+            torch.squeeze(self.h_phi(obs), -1)
+
+        f_thet_phi = g_s + shaping_term
 
         return f_thet_phi
 
@@ -102,12 +113,10 @@ class Discriminator(nn.Module):
         adv = self(*data)
 
         exp_adv = torch.exp(adv)
-        value = exp_adv / (exp_adv + torch.exp(log_p))
-        value2 = adv / (adv + log_p)
+        value = exp_adv / (exp_adv + torch.exp(log_p) + EPS)
+        # value2 = adv / (adv + log_p + EPS)
 
-        print('\n\nDisc value - value2:  ', (value - value2.mean().item()))
-
-        return value
+        return self.sigmoid(value)
 
 
 class Actor(nn.Module):
