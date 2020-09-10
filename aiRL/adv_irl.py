@@ -221,6 +221,12 @@ def airl(env,
 
             expert_data_path (str): path to expert demonstrations
                 Should be a numpy loadable file
+
+            kl_start (int) : Epoch at which to start checking the
+                kl divergence between the old learned policy and new
+                learned policy.
+                KL starts high (> 1) and drastically diminishes to below 0.1
+                as the policy learns
     """
 
     torch.manual_seed(args['seed'])
@@ -241,7 +247,7 @@ def airl(env,
                                           actor.disc.g_theta, actor.disc.h_phi)
     ]
     print(f'\nParameters\npi: {params[0]}  ' +
-          f'discr: { params[1] } [h: {params[2]}] [g: {params[3]}]')
+          f'discr: { params[1] } [g: {params[2]}] [h: {params[3]}]')
 
     memory = ReplayBuffer(act_dim,
                           obs_dim,
@@ -265,6 +271,7 @@ def airl(env,
     pi_kl = []
     disc_logs = []
     disc_outputs = []  # Discriminator Predictions
+    err_demo_logs, err_sample_logs = [], []
     first_run_ret = None
 
     def compute_pi_loss(log_p_old, act_b, *expert_demos):
@@ -340,10 +347,10 @@ def airl(env,
         # Should start at ~ 1 and converge to 0.5
 
         # For sample data, should start at 0 and converge to 0.5
-        d_x = output.mean().item()
+        d_x = output
 
         # Call err_demo.backward first!
-        return d_x, -err_d
+        return d_x, err_d
 
     def update(epoch, train_args=args):
         """
@@ -371,10 +378,10 @@ def airl(env,
                                             log_p=log_p,
                                             label=label.fill_(pi_label))
 
-        av_demo_output_old, err_demo_old = demo_info
-        av_pi_output_old, err_pi_samples_old = pi_samples_info
+        _, err_demo_old = demo_info
+        _, err_pi_samples_old = pi_samples_info
 
-        disc_loss_old = (err_demo_old - err_pi_samples_old).mean().item()
+        disc_loss_old = (err_demo_old + err_pi_samples_old).mean().item()
 
         for i in range(train_args['disc_train_n_iters']):
             # Train with expert demonstrations
@@ -396,23 +403,29 @@ def airl(env,
                                                              log_p=log_p,
                                                              label=label)
 
+            err_pi_samples = -err_pi_samples
             err_pi_samples.backward()
-            loss = err_demo.mean() - err_pi_samples.mean()
+            loss = err_demo + err_pi_samples
 
             # - To turn minimization to Maximization of the objective
             #-loss.backward()
 
             discr_optimizer.step()
 
+        av_pi_output = av_pi_output.mean().item()
+        av_demo_output = av_demo_output.mean().item()
         err_demo = err_demo.item()
         err_pi_samples = err_pi_samples.item()
         disc_loss = loss.item()
+
+        kl_start = epoch >= train_args['kl_start']
 
         for i in range(train_args['pi_train_n_iters']):
             pi_optimizer.zero_grad()
 
             pi_loss, kl, entropy = compute_pi_loss(log_p, act, *exp_data)
-            if kl > 1.5 * train_args['max_kl']:  # Early stop for high Kl
+            if kl_start and kl > 1.5 * train_args[
+                    'max_kl']:  # Early stop for high Kl
                 print('Max kl reached: ', kl, '  iter: ', i)
                 break
 
@@ -433,6 +446,8 @@ def airl(env,
 
         delta_disc_logs.append(delta_disc_loss)
         delta_pi_logs.append(delta_pi_loss)
+        err_demo_logs.append(err_demo)
+        err_sample_logs.append(err_pi_samples)
 
         logger.add_scalar('loss/pi', pi_loss, epoch)
         logger.add_scalar('loss/D', disc_loss, epoch)
@@ -516,11 +531,13 @@ def airl(env,
             'Pi_Loss': Pi_Loss,
             'Disc_loss': Disc_loss,
             'FirstEpochAvReturn': first_run_ret,
-            'RunTime': RunTime,
             'Delta-Pi': delta_pi_loss,
             'Delta-D': delta_disc_loss,
+            'Disc-DemoLoss': err_demo_logs[t],
+            'Disc-SamplesLoss': err_sample_logs[t],
             'AvDisc-Demo-Output': disc_outs[0],
-            'AvDisc-PiSamples-Output': disc_outs[1]
+            'AvDisc-PiSamples-Output': disc_outs[1],
+            'RunTime': RunTime
         }
 
         print('\n', t + 1)

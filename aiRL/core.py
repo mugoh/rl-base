@@ -116,7 +116,7 @@ class Discriminator(nn.Module):
         value = exp_adv / (exp_adv + torch.exp(log_p) + EPS)
         # value2 = adv / (adv + log_p + EPS)
 
-        return value
+        return self.sigmoid(value)
 
 
 class Actor(nn.Module):

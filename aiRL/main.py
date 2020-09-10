@@ -28,20 +28,32 @@ import gym
 @click.option('--pi_learning_rate', '-pi_lr', type=float, default=1e-4)
 @click.option('--disc_learning_rate', '-d_lr', type=float, default=2e-4)
 @click.option('--seed', type=int, default=1)
+@click.option('--target_kl',
+              '-kl',
+              type=int,
+              help="Maximum kl between new and old trained policies")
+@click.option(
+    '--kl_start_epoch',
+    '-kl_start',
+    type=int,
+    help="Iteration at which to start checking for target KL divergence")
 def main(**args):
     """
         User interaction & entry
     """
     env = gym.make(args.pop('env'))
 
-    ac_args = {'hidden_size': [64, 64], 'size': 2}
+    ac_args = {
+        'hidden_size': [64, 64],
+        'size': 2,
+    }
 
     # Discriminator approximators
     disc_args = {
         'g_args': {
-            'hidden_layers': [32, 1],
+            'hidden_layers': [1],
             'size': 1,
-            'activation': nn.Identity
+            'activation': nn.Tanh
         },
         'h_args': {
             'hidden_layers': [32, 32, 1],
@@ -55,7 +67,8 @@ def main(**args):
     train_args = {
         'pi_train_n_iters': 80,
         'disc_train_n_iters': 40,
-        'max_kl': 5,
+        'max_kl': .15,
+        'kl_start': 20,
         'entropy_reg': .1,
         'clip_ratio': .2,
         'max_eps_len': 150,
@@ -70,8 +83,8 @@ def main(**args):
 
     all_args = {
         'ac_args': ac_args,
-        'pi_lr': 3e-4,
-        'disc_lr': 2e-4,
+        'pi_lr': 2e-4,
+        'disc_lr': 1e-4,
         'gamma': .99,
         'buffer_size': int(1e6),
         **agent_args,
