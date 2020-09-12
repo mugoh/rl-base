@@ -264,9 +264,12 @@ def airl(env,
                           expert_data_path=args['expert_data_path'],
                           expert_buffer=ExpertBuffer)
 
-    pi_optimizer = optim.Adam(actor.pi.parameters(), args.get('pi_lr') or 1e-4)
+    pi_optimizer = optim.Adam(actor.pi.parameters(),
+                              args.get('pi_lr') or 1e-4,
+                              betas=[.5, .9])
     discr_optimizer = optim.Adam(actor.disc.parameters(),
-                                 args.get('disc_lr') or 2e-4)
+                                 args.get('disc_lr') or 2e-4,
+                                 betas=[.5, .9])
     loss_criterion = nn.BCELoss()
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
@@ -277,7 +280,7 @@ def airl(env,
 
     # Hold epoch losses for logging
     pi_losses, disc_losses, delta_disc_logs, delta_pi_logs = [], [], [], []
-    pi_kl = []
+    pi_kl, entropy_logs = [], []
     disc_logs = []
     disc_outputs = []  # Discriminator Predictions
     err_demo_logs, err_sample_logs = [], []
@@ -457,6 +460,7 @@ def airl(env,
         delta_pi_logs.append(delta_pi_loss)
         err_demo_logs.append(err_demo)
         err_sample_logs.append(err_pi_samples)
+        entropy_logs.append(entropy)
 
         logger.add_scalar('loss/pi', pi_loss, epoch)
         logger.add_scalar('loss/D', disc_loss, epoch)
@@ -470,6 +474,7 @@ def airl(env,
         logger.add_scalar('Disc-Output/LearnedPolicy', av_pi_output, epoch)
 
         logger.add_scalar('Kl', kl, epoch)
+        logger.add_scalar('Entropy', entropy, epoch)
 
     start_time = time.time()
     obs = env.reset()
@@ -536,6 +541,7 @@ def airl(env,
             'MinEpsReturn': MinEpsReturn,
             'MaxEpsReturn': MaxEpsReturn,
             'KL': Kl,
+            'Entropy': entropy_logs[t],
             'AverageEpisodeLen': AverageEpisodeLen,
             'Pi_Loss': Pi_Loss,
             'Disc_loss': Disc_loss,
@@ -550,7 +556,8 @@ def airl(env,
         }
 
         print('\n', t + 1)
-        print('', '-' * 35)
+        print('-' * 35)
+
         for k, v in all_logs.items():
             print(k, v)
 

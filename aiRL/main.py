@@ -41,16 +41,13 @@ def main(**args):
     """
     env = gym.make(args.pop('env'))
 
-    ac_args = {
-        'hidden_size': [64, 64],
-        'size': 2,
-    }
+    ac_args = {'hidden_size': [64, 64], 'size': 2, 'activation': nn.LeakyReLU}
 
     # Discriminator approximators
     disc_args = {
         'g_args': {
-            'hidden_layers': [32, 32, 1],
-            'size': 2,
+            'hidden_layers': [1],
+            'size': 1,
             'activation': nn.Identity
         },
         'h_args': {

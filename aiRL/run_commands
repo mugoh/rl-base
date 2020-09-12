@@ -27,3 +27,9 @@ python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23
 
 250 epochs ( but as above)
 python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23_rlast20.npz' -ep_len 1000 -spe 1000 -pi_lr 2e-4 --env_name pi2e-4_b1000 -d_lr 1e-4 -ep 250
+
+
+Use beta1 = 0.5, d_lr=2e-4 h:LeakyRelu, Relu: pi
+python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23_rlast20.npz' -ep_len 1000 -spe 1000 -pi_lr 2e-4 --env_name pi2e-4_b1000g_1 -d_lr 2e-4 -ep 100
+
+# (for tensorborad refresh )--reload_multifile True
