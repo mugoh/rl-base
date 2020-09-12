@@ -1,0 +1,29 @@
+InvertedPendulum
+
+First 2 trained with samples from 10 epochs, 1000 steps per epoch. Learning very slow
+python3 main.py --env 'InvertedPendulum-v2' -demos '.data/expert_data_10-09-2020_16-12-33.npz' -ep_len 1000 -spe 10000 -pi_lr 3e-4 --env_name pi3e-4_b10000
+
+python3 main.py --env 'InvertedPendulum-v2' -demos '.data/expert_data_10-09-2020_16-12-33.npz' -ep_len 1000 -spe 10000 -pi_lr 3e-4 --env_name pi3e-4_b10000_gsize2 -d_lr 1e-4
+
+
+
+100 demo epochs collected. 10000 steps per epoch
+
+python3 main.py --env 'InvertedPendulum-v2' -demos '.data/expert_data_11-09-2020_09-46-00.npz' -ep_len 1000 -spe 10000 -pi_lr 2e-4 --env_name pi2e-4_b10000_gsize2_e100 -d_lr 1e-4
+
+
+
+Hopper
+
+python3 main.py --env 'Hopper-v2' -demos '.data/expert_data_Hopper-v2_11-09-2020_13-53-03.npz' -ep_len 1000 -spe 10000 -pi_lr 2e-4 --env_name pi2e-4_b10000_gsize2_e100 -d_lr 1e-4
+
+v3
+
+python3 main.py --env 'Hopper-v3' -demos '.data/expert_data_Hopper-v3_11-09-2020_15-31-38_r230.npz' -ep_len 1000 -spe 1000 -pi_lr 2e-4 --env_name pi2e-4_b1000 -d_lr 1e-4
+
+
+python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23_rlast20.npz' -ep_len 1000 -spe 1000 -pi_lr 2e-4 --env_name pi2e-4_b1000 -d_lr 1e-4
+
+
+250 epochs ( but as above)
+python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23_rlast20.npz' -ep_len 1000 -spe 1000 -pi_lr 2e-4 --env_name pi2e-4_b1000 -d_lr 1e-4 -ep 250

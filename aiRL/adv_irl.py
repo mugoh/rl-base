@@ -6,16 +6,16 @@ Big Qs:
     without being a function of the action (state only)
 """
 
+import os
+import time
+
+import gym
+import numpy as np
+
 import torch
 import torch.nn as nn
-from torch.utils.tensorboard import SummaryWriter
 import torch.optim as optim
-
-import numpy as np
-import gym
-
-import time
-import os
+from torch.utils.tensorboard import SummaryWriter
 
 import core
 
@@ -136,8 +136,15 @@ class ExpertBuffer():
         # get all iterations transitions
         data = [traj for traj in data_file.values()]
 
-        #  traj in x batch arrays. Unroll to 1
-        data = np.concatenate(data)
+        try:
+            #  traj in x batch arrays. Unroll to 1
+            data = np.concatenate(data)
+
+            # Handle differnce in saving formats
+        except ValueError:
+            # Zero dimension array can't be
+            data = [d[None] for d in data]
+            data = np.concatenate(data)
 
         self.obs = np.concatenate([path['observation'] for path in data])
         self.obs_n = np.concatenate(
@@ -227,6 +234,8 @@ def airl(env,
                 learned policy.
                 KL starts high (> 1) and drastically diminishes to below 0.1
                 as the policy learns
+
+            n_epochs (int): Number of policy updates to perform (Iterations)
     """
 
     torch.manual_seed(args['seed'])

@@ -17,7 +17,6 @@ class ReplayBuffer:
         Transitions buffer
         Stores transitions for a single episode
     """
-
     def __init__(self, act_dim, obs_dim, size=4000, gamma=.98, lamda=.95):
         self.size = size
         self.gamma = gamma
@@ -82,7 +81,15 @@ class ReplayBuffer:
         self.eps_end_ptr = self.ptr
 
 
-def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps_per_epoch=5000, max_eps_len=1000, clip_ratio=.2, **args):
+def ppo(env,
+        actor_class=core.MLPActor,
+        gamma=.99,
+        lamda=.95,
+        n_epochs=50,
+        steps_per_epoch=5000,
+        max_eps_len=1000,
+        clip_ratio=.2,
+        **args):
     """
     actor_args: hidden_size(list), size(int)-network size, pi_lr, v_lr
     max_lr: Max kl divergence between new and old polices (0.01 - 0.05)
@@ -92,17 +99,21 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
     obs_space = env.observation_space
     act_space = env.action_space
 
-    act_dim = act_space.shape[0] if not isinstance(act_space,
-                                                   gym.spaces.Discrete) else act_space.n
+    act_dim = act_space.shape[0] if not isinstance(
+        act_space, gym.spaces.Discrete) else act_space.n
     obs_dim = obs_space.shape[0]
 
     actor = actor_class(obs_space=obs_space,
-                        act_space=act_space, **args['ac_args'])
+                        act_space=act_space,
+                        **args['ac_args'])
     params = [core.count(module) for module in (actor.pi, actor.v)]
     print(f'\nParameters\npi: {params[0]}  v: { params[1] }')
 
-    memory = ReplayBuffer(act_dim, obs_dim, steps_per_epoch,
-                          lamda=lamda, gamma=gamma)
+    memory = ReplayBuffer(act_dim,
+                          obs_dim,
+                          steps_per_epoch,
+                          lamda=lamda,
+                          gamma=gamma)
 
     pi_optimizer = optim.Adam(actor.pi.parameters(), args.get('pi_lr') or 1e-4)
     v_optimizer = optim.Adam(actor.v.parameters(), args.get('v_lr') or 1e-3)
@@ -114,8 +125,8 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
     first_run_ret = None
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
-    path = os.path.join('data', env.unwrapped.spec.id +
-                        args.get('env_name', '') + '_' + run_t)
+    path = os.path.join(
+        'data', env.unwrapped.spec.id + args.get('env_name', '') + '_' + run_t)
 
     # if not os.path.exists(path):
     #    os.makedirs(path)
@@ -132,8 +143,8 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         log_p_ = log_p_.type(torch.float32)  # From torch.float64
 
         pi_ratio = torch.exp(log_p_ - log_p_old)
-        min_adv = torch.where(adv_b >= 0, (1 + clip_ratio)
-                              * adv_b, (1-clip_ratio) * adv_b)
+        min_adv = torch.where(adv_b >= 0, (1 + clip_ratio) * adv_b,
+                              (1 - clip_ratio) * adv_b)
 
         pi_loss = -torch.mean(torch.min(pi_ratio * adv_b, min_adv))
 
@@ -146,7 +157,7 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         obs_b, rew_b = data['obs_b'], data['rew_b']
 
         v_pred = actor.v(obs_b)
-        v_loss = torch.mean((v_pred - rew_b) ** 2)
+        v_loss = torch.mean((v_pred - rew_b)**2)
 
         return v_loss
 
@@ -158,15 +169,19 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
         act_b, rew_b, obs_b, adv_b, log_p_old = data
 
         # loss before update
-        pi_loss_old, kl = compute_pi_loss(
-            log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
+        pi_loss_old, kl = compute_pi_loss(log_p_old=log_p_old,
+                                          obs_b=obs_b,
+                                          adv_b=adv_b,
+                                          act_b=act_b)
 
         v_loss_old = compute_v_loss({'obs_b': obs_b, 'rew_b': rew_b}).item()
 
         for i in range(train_args['pi_train_n_iters']):
             pi_optimizer.zero_grad()
-            pi_loss, kl = compute_pi_loss(
-                log_p_old=log_p_old, obs_b=obs_b, adv_b=adv_b, act_b=act_b)
+            pi_loss, kl = compute_pi_loss(log_p_old=log_p_old,
+                                          obs_b=obs_b,
+                                          adv_b=adv_b,
+                                          act_b=act_b)
 
             if kl > 1.5 * train_args['max_kl']:  # Early stop for high Kl
                 print('Max kl reached: ', kl, '  iter: ', i)
@@ -229,8 +244,8 @@ def ppo(env, actor_class=core.MLPActor, gamma=.99, lamda=.95, n_epochs=50, steps
             if terminal or step == steps_per_epoch - 1:
                 # terminated by max episode steps
                 if not done:
-                    last_v = actor.step(torch.as_tensor(
-                        obs, dtype=torch.float32))[1]
+                    last_v = actor.step(
+                        torch.as_tensor(obs, dtype=torch.float32))[1]
                 else:  # Agent terminated episode
                     last_v = 0
 
@@ -296,10 +311,7 @@ def main():
 
     env = gym.make('HalfCheetah-v2')
 
-    ac_args = {
-        'hidden_size': [64, 64],
-        'size': 2
-    }
+    ac_args = {'hidden_size': [64, 64], 'size': 2}
     train_args = {
         'pi_train_n_iters': 80,
         'v_train_n_iters': 80,
@@ -312,7 +324,15 @@ def main():
         'steps_per_epoch': 10000
     }
 
-    args = {'ac_args': ac_args, 'pi_lr': 1e-4, 'v_lr': 1e-3, 'gamma': .99, 'lamda': .97, **agent_args,  **train_args}
+    args = {
+        'ac_args': ac_args,
+        'pi_lr': 1e-4,
+        'v_lr': 1e-3,
+        'gamma': .99,
+        'lamda': .97,
+        **agent_args,
+        **train_args
+    }
 
     ppo(env, **args)
 

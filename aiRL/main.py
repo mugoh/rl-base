@@ -1,11 +1,9 @@
 """AIRL Runner"""
-
-from adv_irl import airl
-
-from torch import nn
-
 import click
 import gym
+from torch import nn
+
+from adv_irl import airl
 
 
 @click.command()
@@ -39,7 +37,7 @@ import gym
     help="Iteration at which to start checking for target KL divergence")
 def main(**args):
     """
-        User interaction & entry
+        Adversarial Inverser RL runner
     """
     env = gym.make(args.pop('env'))
 
@@ -51,14 +49,14 @@ def main(**args):
     # Discriminator approximators
     disc_args = {
         'g_args': {
-            'hidden_layers': [1],
-            'size': 1,
-            'activation': nn.Tanh
+            'hidden_layers': [32, 32, 1],
+            'size': 2,
+            'activation': nn.Identity
         },
         'h_args': {
             'hidden_layers': [32, 32, 1],
             'size': 2,
-            'activation': nn.ReLU
+            'activation': nn.LeakyReLU
         }
     }
 
@@ -76,7 +74,7 @@ def main(**args):
         'pi_label': 0
     }
     agent_args = {
-        'n_epochs': 100,
+        'n_epochs': args.pop('epochs'),
         'env_name': '',  # 'b_10000_plr_.1e-4',
         'steps_per_epoch': 10000
     }
