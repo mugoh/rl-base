@@ -28,20 +28,29 @@ from adv_irl import airl
 @click.option('--seed', type=int, default=1)
 @click.option('--target_kl',
               '-kl',
-              type=int,
+              type=float,
+              default=.15,
               help="Maximum kl between new and old trained policies")
 @click.option(
-    '--kl_start_epoch',
+    '--kl_start',
     '-kl_start',
     type=int,
     help="Iteration at which to start checking for target KL divergence")
+@click.option('--pi_train_n_iters',
+              '-pi_updates',
+              type=int,
+              help='Number of policy updates to perform per epoch')
+@click.option('--disc_train_n_iters',
+              '-d_updates',
+              type=int,
+              help='Number of discriminator updates to perform per epoch')
 def main(**args):
     """
         Adversarial Inverser RL runner
     """
     env = gym.make(args.pop('env'))
 
-    ac_args = {'hidden_size': [64, 64], 'size': 2, 'activation': nn.LeakyReLU}
+    ac_args = {'hidden_size': [64, 64], 'size': 2, 'activation': nn.ReLU}
 
     # Discriminator approximators
     disc_args = {
@@ -62,7 +71,7 @@ def main(**args):
     train_args = {
         'pi_train_n_iters': 80,
         'disc_train_n_iters': 40,
-        'max_kl': .15,
+        'max_kl': args.pop('target_kl'),
         'kl_start': 20,
         'entropy_reg': .1,
         'clip_ratio': .2,

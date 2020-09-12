@@ -306,6 +306,8 @@ def airl(env,
         # r_t^(s, a) = A(s, a)
         adv_b = actor.disc(obs_b, obs_n_b, dones_b) - log_p_old
 
+        adv_b = (adv_b + adv_b.mean()) / adv_b.std()
+
         pi_ratio = torch.exp(log_p_ - log_p_old)
 
         # Soft PPO update - Encourages entropy in the policy
