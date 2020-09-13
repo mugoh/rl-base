@@ -38,8 +38,12 @@ def mlp(x,
     for size in hidden_layers[:-1]:
         layer = nn.Linear(x, size)
         net_layers.append(layer)
+
+        # For discriminator
         if activation.__name__ == 'ReLU':
-            net_layers.append(activation(False))
+            net_layers.append(activation(inplace=True))
+        elif activation.__name__ == 'LeakyReLU':
+            net_layers.append(activation(.2, inplace=True))
         else:
             net_layers.append(activation())
         x = size

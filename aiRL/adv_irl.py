@@ -387,42 +387,52 @@ def airl(env,
 
         label = torch.full((batch_size, ), real_label, dtype=torch.float32)
 
-        demo_info = compute_disc_loss(*exp_data, log_p=log_p, label=label)
-        pi_samples_info = compute_disc_loss(*sample_disc_data,
-                                            log_p=log_p,
-                                            label=label.fill_(pi_label))
+        with torch.no_grad():
+            demo_info = compute_disc_loss(*exp_data, log_p=log_p, label=label)
+            pi_samples_info = compute_disc_loss(*sample_disc_data,
+                                                log_p=log_p,
+                                                label=label.fill_(pi_label))
 
-        _, err_demo_old = demo_info
-        _, err_pi_samples_old = pi_samples_info
+            _, err_demo_old = demo_info
+            _, err_pi_samples_old = pi_samples_info
 
-        disc_loss_old = (err_demo_old + err_pi_samples_old).mean().item()
+            disc_loss_old = -(err_demo_old - err_pi_samples_old).mean().item()
 
         for i in range(train_args['disc_train_n_iters']):
             # Train with expert demonstrations
             # log(D(s, a, s'))
 
-            actor.disc.zero_grad()
+            # av_demo_output, err_demo = compute_disc_loss(
+            #    *exp_data, log_p=log_p, label=label.fill_(real_label))
 
-            av_demo_output, err_demo = compute_disc_loss(
-                *exp_data, log_p=log_p, label=label.fill_(real_label))
+            av_demo_output = actor.disc.discr_value(log_p, *exp_data)
+            #err_demo = loss_criterion(av_demo_output, label.fill_(real_label))
+            err_demo = torch.log(av_demo_output).mean()
 
-            err_demo.backward()
+            # err_demo.backward()
             # works too, but compute backprop once
             # See "disc_loss_update_test.ipynb"
 
             # Train with policy samples
             # - log(D(s, a, s'))
-            label.fill_(pi_label)
-            av_pi_output, err_pi_samples = compute_disc_loss(*sample_disc_data,
-                                                             log_p=log_p,
-                                                             label=label)
 
-            err_pi_samples = -err_pi_samples
-            err_pi_samples.backward()
-            loss = err_demo + err_pi_samples
+            # label.fill_(pi_label)
+            # av_pi_output, err_pi_samples = compute_disc_loss(*sample_disc_data,
+            #                                                 log_p=log_p,
+            #                                                 label=label)
+
+            av_pi_output = actor.disc.discr_value(log_p, *sample_disc_data)
+
+            # err_pi_samples = loss_criterion(av_pi_output, label)
+            err_pi_samples = torch.log(1. - av_pi_output).mean()
+
+            discr_optimizer.zero_grad()
+
+            # err_pi_samples.backward()
+            loss = -(err_demo - err_pi_samples)
 
             # - To turn minimization to Maximization of the objective
-            #-loss.backward()
+            loss.backward()
 
             discr_optimizer.step()
 
