@@ -1,3 +1,8 @@
+To Note:
+Calculate discriminator loss directly: See https://stackoverflow.com/questions/62061703/runtimeerror-one-of-the-variables-needed-for-gradient-computation-has-been-modi
+
+
+
 InvertedPendulum
 
 First 2 trained with samples from 10 epochs, 1000 steps per epoch. Learning very slow
@@ -39,3 +44,5 @@ python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23
 Changed disc lr, and number of steps to 5000 to avoid predictions not between 0 and 1
 
 python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23_rlast20.npz' -ep_len 1000 -spe 1000 -pi_lr 2e-4 --env_name pi2e-4_b1000g_1 -d_lr 1e-5 -ep 100 --target_kl 5 -pi_updates 20 -d_updates 40 -ep 100
+
+python3 main.py --env 'Hopper-v3' -demos '.data/expert_data__11-09-2020_15-57-23_rlast20.npz' -ep_len 1000 -spe 1000 -pi_lr 2e-4 --env_name pi2e-4_b1000g_1 -d_lr 1e-4 -ep 100 --target_kl 5 -pi_updates 20 -d_updates 40 -ep 100
