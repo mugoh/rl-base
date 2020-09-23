@@ -20,16 +20,15 @@ from adv_irl import airl
               type=str,
               default='.data/expert_data_13-08-2020_16-09-18.npz',
               help="Path to expert data file")
-@click.option('--epochs', '-ep', type=int, default=100)
-@click.option('--steps_per_epoch', '-spe', type=int, default=1000)
+@click.option('--epochs', '-ep', type=int)
+@click.option('--steps_per_epoch', '-spe', type=int, default=10000)
 @click.option('--max_eps_len', '-ep_len', type=int)
-@click.option('--pi_learning_rate', '-pi_lr', type=float, default=1e-4)
-@click.option('--disc_learning_rate', '-d_lr', type=float, default=2e-4)
+@click.option('--pi_learning_rate', '-pi_lr', type=float)
+@click.option('--disc_learning_rate', '-d_lr', type=float)
 @click.option('--seed', type=int, default=1)
 @click.option('--target_kl',
               '-kl',
               type=float,
-              default=.15,
               help="Maximum kl between new and old trained policies")
 @click.option(
     '--kl_start',
@@ -71,7 +70,7 @@ def main(**args):
     train_args = {
         'pi_train_n_iters': 80,
         'disc_train_n_iters': 40,
-        'max_kl': args.pop('target_kl'),
+        'max_kl': args.pop('target_kl') or 1.,
         'kl_start': 20,
         'entropy_reg': .1,
         'clip_ratio': .2,
@@ -80,7 +79,7 @@ def main(**args):
         'pi_label': 0
     }
     agent_args = {
-        'n_epochs': args.pop('epochs'),
+        'n_epochs': args.pop('epochs') or 250,
         'env_name': '',  # 'b_10000_plr_.1e-4',
         'steps_per_epoch': 10000
     }

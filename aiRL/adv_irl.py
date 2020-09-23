@@ -306,9 +306,11 @@ def airl(env,
         # r_t^(s, a) = A(s, a)
         adv_b = actor.disc(obs_b, obs_n_b, dones_b) - log_p_old
 
-        adv_b = (adv_b + adv_b.mean()) / adv_b.std()
+        adv_b = (adv_b - adv_b.mean()) / adv_b.std()
 
-        pi_ratio = torch.exp(log_p_ - log_p_old)
+        pi_diff = log_p_ - log_p_old
+
+        pi_ratio = torch.exp(pi_diff)
 
         # Soft PPO update - Encourages entropy in the policy
 
@@ -318,13 +320,13 @@ def airl(env,
         # trying other actions which might have higher reward
 
         # A_old_pi(s, a) = A(s, a) - entropy_reg * log pi_old(a|s)
-        adv_b = adv_b - entropy_reg * log_p_old
+        adv_b = adv_b -(  entropy_reg * log_p_old)
 
         min_adv = torch.where(adv_b >= 0, (1 + clip_ratio) * adv_b,
                               (1 - clip_ratio) * adv_b)
 
         pi_loss = -torch.mean(torch.min(pi_ratio * adv_b, min_adv))
-        kl = (log_p_old - log_p_).mean().item()
+        kl = -(pi_diff).mean().item()
         entropy = pi_new.entropy().mean().item()
 
         return pi_loss, kl, entropy
@@ -370,7 +372,6 @@ def airl(env,
         """
             Perfroms gradient update on pi and discriminator
         """
-        torch.autograd.set_detect_anomaly(True)
 
         batch_size = steps_per_epoch
         real_label = train_args['real_label']

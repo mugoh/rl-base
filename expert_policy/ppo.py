@@ -104,6 +104,7 @@ class ReplayBuffer:
         # GAE
         deltas = rew[:-1] + self.gamma * vals[1:] - vals[:-1]
         self.adv[idx] = discounted_cumsum(deltas, self.gamma * self.lamda)
+        self.adv = (self.adv - self.adv.mean()) / self.adv.std()
 
         # Reward to go
         self.rewards[idx] = discounted_cumsum(rew, self.gamma)[:-1]
