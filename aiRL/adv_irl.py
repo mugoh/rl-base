@@ -479,6 +479,7 @@ def airl(env,
         logger.add_scalar('Entropy', entropy, epoch)
 
     start_time = time.time()
+
     obs = env.reset()
     eps_len, eps_ret = 0, 0
 

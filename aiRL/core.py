@@ -101,8 +101,8 @@ class Discriminator(nn.Module):
         g_s = torch.squeeze(self.g_theta(obs), axis=-1)
 
         shaping_term = self.gamma * \
-            (1 - dones) * torch.squeeze(self.h_phi(obs_n), -1) - \
-            torch.squeeze(self.h_phi(obs), -1)
+            (1 - dones) * self.h_phi(obs_n).squeeze() - \
+            self.h_phi(obs).squeeze(-1)
 
         f_thet_phi = g_s + shaping_term
 
