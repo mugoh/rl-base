@@ -43,6 +43,9 @@ from adv_irl import airl
               '-d_updates',
               type=int,
               help='Number of discriminator updates to perform per epoch')
+@click.option('--entropy_reg', '-tm',
+              type=float, help='Temperature for entopy regularization.\n' +
+              'Between 0 and 1. Higher value encourages stochasticity')
 def main(**args):
     """
         Adversarial Inverser RL runner

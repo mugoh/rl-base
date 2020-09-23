@@ -202,11 +202,15 @@ def airl(env,
         Learning Robust Rewards with Adversarial Inversere RL
         Algorithm used: Soft PPO
 
-        args: buffer_size:int(1e6), disc_lr: 2e-4,
 
         Args:
-            entropy_reg (float): Entropy regularizer for Soft Ppo (SPPO)
-                Denoted :math: `\alpha`
+            entropy_reg (float): Entropy regularizer temperature for Soft Ppo (SPPO)
+                Denoted :math: `\alpha` [0, 1]
+                Higher values of temperature encourage stochasticity in the policy
+                while lower values make it more deterministic
+
+                see -> https://arxiv.org/abs/1912.01557
+
 
             max_kl (float): KL divergence regulator. Used for early stopping
                 when the KL between the new and old policy exceeds this
@@ -236,6 +240,8 @@ def airl(env,
                 as the policy learns
 
             n_epochs (int): Number of policy updates to perform (Iterations)
+
+            steps_per_epoch (int): Number of env steps to take per update
     """
 
     torch.manual_seed(args['seed'])
@@ -320,7 +326,7 @@ def airl(env,
         # trying other actions which might have higher reward
 
         # A_old_pi(s, a) = A(s, a) - entropy_reg * log pi_old(a|s)
-        adv_b = adv_b -(  entropy_reg * log_p_old)
+        adv_b = adv_b - (  entropy_reg * log_p_old)
 
         min_adv = torch.where(adv_b >= 0, (1 + clip_ratio) * adv_b,
                               (1 - clip_ratio) * adv_b)
