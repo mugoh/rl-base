@@ -387,7 +387,8 @@ def airl(env,
         act, rew, obs, obs_n, dones, log_p = data
         sample_disc_data = data[2:-1]
 
-        exp_data = memory.expt_buff.get(batch_size)
+        exp_data = memory.expt_buff.get(batch_size) \
+            if not train_args['random_demos'] else memory.expt_buff.get_random(batch_size)
 
         # loss before update
         pi_loss_old, kl, entropy = compute_pi_loss(log_p, act, *exp_data)

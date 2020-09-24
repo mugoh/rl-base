@@ -18,7 +18,7 @@ from adv_irl import airl
 @click.option('--expert_data_path',
               '-demos',
               type=str,
-              default='.data/expert_data_13-08-2020_16-09-18.npz',
+              required=True,
               help="Path to expert data file")
 @click.option('--epochs', '-ep', type=int)
 @click.option('--steps_per_epoch', '-spe', type=int, default=10000)
@@ -46,6 +46,10 @@ from adv_irl import airl
 @click.option('--entropy_reg', '-tm',
               type=float, help='Temperature for entopy regularization.\n' +
               'Between 0 and 1. Higher value encourages stochasticity')
+@click.option('--random_demos', '-rnd_d',
+              is_flag=True,
+              help='Sample demonstrations randomly without replacement.\n' +
+              'By default expert demos are sampled from buffer sequentially')
 def main(**args):
     """
         Adversarial Inverser RL runner
