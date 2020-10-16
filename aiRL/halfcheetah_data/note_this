@@ -1,0 +1,11 @@
+The iRL average return is slightly higher than the standard PPO policy.
+This is because the iRL expert data was collected as the last 20 epochs of a 250 epoch run
+
+- The iRL plot is a bit unstable because a higher LR was used compared to the standard iRL (Actually, no. Ignore)
+
+
+- For the data collection policy. In the read me, remember to note
+
+  >	Use "python3 collect_data.py --help" for a full list of all expert policy options available
+
+
