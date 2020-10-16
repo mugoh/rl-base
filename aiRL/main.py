@@ -20,21 +20,24 @@ from adv_irl import airl
               type=str,
               required=True,
               help="Path to expert data file")
-@click.option('--epochs', '-ep', type=int)
-@click.option('--steps_per_epoch', '-spe', type=int, default=10000)
-@click.option('--max_eps_len', '-ep_len', type=int)
-@click.option('--pi_learning_rate', '-pi_lr', type=float)
-@click.option('--disc_learning_rate', '-d_lr', type=float)
-@click.option('--seed', type=int, default=1)
+@click.option('--epochs', '-ep', type=int, help='Number of iterations to run')
+@click.option('--steps_per_epoch', '-spe', type=int, default=10000,
+              help='Number of env steps to take per epoch')
+@click.option('--max_eps_len', '-ep_len', type=int,
+              help='Limit for number of steps to take per episode')
+@click.option('--pi_learning_rate', '-pi_lr', type=float, help='Policy learning rate')
+@click.option('--disc_learning_rate', '-d_lr', type=float, help='Discriminator learning rate')
+@click.option('--seed', type=int, default=1, help='Seed for random number generator')
 @click.option('--target_kl',
               '-kl',
               type=float,
-              help="Maximum kl between new and old trained policies")
+              help='Maximum kl divergence between new and old trained policies\n' +
+              'Triggers early stopping for policy updates')
 @click.option(
     '--kl_start',
     '-kl_start',
     type=int,
-    help="Iteration at which to start checking for target KL divergence")
+    help="Epoch at which to start enforcing the target KL divergence limit")
 @click.option('--pi_train_n_iters',
               '-pi_updates',
               type=int,
