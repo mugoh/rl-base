@@ -8,7 +8,7 @@ from ppo import ppo
 @click.option('--env',
               type=str,
               default='HalfCheetah-v2',
-              help='Gym environment name')
+              help='Gym environment name\n[default=HalfCheetah-v2]')
 @click.option('--env_name',
               type=str,
               default='',
@@ -29,7 +29,9 @@ from ppo import ppo
               help="KL target between new and old policies. Used to trigger early stopping")
 @click.option('--min_expert_return',
               '-min_ret', type=float,
-              help='Minimum average reward on an epoch for which to add to the expert data')
+              help='Episode average return threshold for us to collect a trajectory as expert '
+              + 'data.\nThis is the minimum average reward on an epoch for which to classify' +
+              ' as an expert demo')
 @click.option('--n_demo_itrs',
               '-n_demos',
               type=int,
