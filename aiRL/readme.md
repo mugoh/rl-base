@@ -60,7 +60,7 @@ This work is build on Python3.6
  **The `expert_policy/` PPO implementation is devoted to help with this**
 
  ##### a) Using already collected demos
-   There is a file of already saved expert demonstrations for the `HalfCheetah-v2 `env. Download it from [ here ](insert link)
+   There is a file of already saved expert demonstrations for the `HalfCheetah-v2 `env. Download it from [ here ](https://drive.google.com/file/d/1eZa6uXpJhmzKyChrI-zCTHGsI62Xy7VL/view?usp=drivesdk)
 
 
  ##### b) Alternatively, collect your own demostrations 
@@ -71,7 +71,8 @@ This work is build on Python3.6
         python3 expert_policy/collect_data.py
      ```
 
-    This will collect data from the final 25 epochs of the expert data policy
+   This will collect data from the final 25 epochs of the expert data policy
+
 
   - For a list of tunable options and hyperparams, see the help menu by running:
 
@@ -80,7 +81,7 @@ This work is build on Python3.6
       ```
 
 
-  > The above command will collect and save expert demonstrations in your current directory. The file will have the naming format
+   > The above command will collect and save expert demonstrations in your current directory. The file will have the naming format
 
    ```$
        expert_data_{gym_env_name}_{YMD:HMS timestamp}_{number_of_demo_trajectories_saved}[.npz]
@@ -148,12 +149,20 @@ This work is build on Python3.6
 
  ##### 3.1 Examples of program outputs
   - Expert Policy
-  [insert iRL expert demo pic]
+
+   ![ expert demo performance](https://github.com/mugoh/rl-base/blob/master/aiRL/halfcheetah%20data/iRL_expert_demo.png) 
 
   - Expert Policy vs iRL based policy
-  [insert iRL vs stdPPO pic]
-  - Your results may vary
-  Here's an example of a different aiRL run
+
+  ![iRL vs stdPPO](https://github.com/mugoh/rl-base/blob/master/aiRL/halfcheetah%20data/Figure_1_irl_vs_stdPPO.png)
+
+    Your results may vary
+
+   Here's an example of a different aiRL run
 
   - (b) Expert Policy vs iRL based policy
-      [insert iRL_learned_vs_demo_returns]
+
+   ![iRL_learned_vs_demo_returns](https://github.com/mugoh/rl-base/blob/master/aiRL/halfcheetah%20data/iRL_learned_vs_demo_returns.png)
+
+
+
