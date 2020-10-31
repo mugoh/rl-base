@@ -2,7 +2,7 @@
 
 ### Implementation of the Paper [Learning Robust Rewards with Adversarial inverse Reinforcement Learning](https://arxiv.org/abs/1710.11248)
 
-This implementation is attached to this [ blog post ](insert link) - for a detailed guide on the implementation of this work
+This implementation is attached to this [ blog post ](https://mugoh.github.io/mug-log/adversarial-inverse-rl/) - for a detailed guide on the implementation of this work
 
 #### Selected tranining details and hyperparameters used
 - Policy samples mixed from previous 20 iterations
