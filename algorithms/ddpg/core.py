@@ -24,7 +24,7 @@ def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Ident
 
 class MLPActor(nn.Module):
     """
-        Policy
+        Policy: Selects an action for each observation
     """
 
     def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: list, activation, act_limit: float):
@@ -39,3 +39,19 @@ class MLPActor(nn.Module):
 
     def forward(self, obs):
         return self.pi(obs) * self.act_limit
+
+
+class MLPQ(nn.Module):
+    """
+        Q Function: Action value function
+    """
+
+    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: list):
+        super(MLPQ, self).__init__()
+
+        self.q = mlp([obs_dim + act_dim], hidden_sizes + [1], activation)
+
+    def forward(self, obs, act):
+        x = torch.cat([obs, act], dim=-1)
+
+        return self.q(x).squeeze(-1)
