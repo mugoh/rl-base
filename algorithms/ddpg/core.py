@@ -1,4 +1,5 @@
 import torch.nn as nn
+import torch
 
 
 def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
@@ -46,12 +47,30 @@ class MLPQ(nn.Module):
         Q Function: Action value function
     """
 
-    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: list):
+    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: list, activation: object):
         super(MLPQ, self).__init__()
 
         self.q = mlp([obs_dim + act_dim], hidden_sizes + [1], activation)
 
     def forward(self, obs, act):
-        x = torch.cat([obs, act], dim=-1)
+        inpt = torch.cat([obs, act], dim=-1)
 
-        return self.q(x).squeeze(-1)
+        return self.q(inpt).squeeze(-1)
+
+
+class MLPActorCritic:
+    def __init__(self, obs_dim: int, act_dim: int, act_limit: float, activation: object = nn.ReLU, hidden_sizes: list = [64, 64]):
+        self.q = MLPQ(obs_dim, act_dim, hidden_sizes, activation=activation)
+        self.pi = MLPActor(obs_dim,
+                           act_dim,
+                           act_limit=act_limit,
+                           activation=activation,
+                           hidden_sizes=hidden_sizes)
+
+    def act(self, obs):
+        """
+            Predict action for given observation
+        """
+
+        with torch.no_grad():
+            return self.pi(obs).numpy()
