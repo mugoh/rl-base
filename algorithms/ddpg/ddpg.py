@@ -65,7 +65,10 @@ class ReplayBuffer:
 def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCritic,
          steps_per_epoch: int = 5000, epochs: int = 100, max_eps_len: int = 1000,
          pi_lr: float = 1e-4, q_lr: float = 1e-3,
-         act_noise_std: float = .1, exploration_steps: int = 10000 ** args):
+         act_noise_std: float = .1, exploration_steps: int = 10000,
+         update_frequency: int = 50, start_update: int = 10000,
+         batch_size: int = 128, gamma: float = .99,
+         ** args):
     """
         Args
         ---
@@ -92,6 +95,18 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
         exploration_steps (int): Number of steps to select actions
             at random uniform before turning to the policy.
             Policy is deterministic
+
+        update_frequency (int): Interval of steps at which to update
+            the actor
+
+        start_update (int): The number of steps to interact with
+            the environment before starting updates.
+            This is meant to collect enough transitions in the
+            replay buffer.
+
+        batch_size (int): SGD mini batch size
+
+        gamma (float): Rewards decay factor
     """
 
     device = torch.device('cpu' if not torch.cuda.is_available else 'gpu')
@@ -135,6 +150,29 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
 
         return np.clip(action + epsilon, -act_limit, act_limit)
 
+    def compute_pi_loss(data):
+        """
+            Policy Loss function
+        """
+        ...
+
+    def compute_q__loss(data, gamma: float):
+        """
+            Q function loss
+        """
+        rew = data['rew']
+        dones = data['dones']
+        n_states = data['obs_n']
+        target = rew + gamma * (1 - dones) * \
+            q_target(n_states, pi_target(n_states))
+
+    def update(self, main_args=args):
+        """
+            Policy and Q function update
+        """
+        data = rep_buffer.sample(main_args['batch_size'])
+        pi_loss = compute_pi_loss(data)
+
     start_time = time.time()
     obs = env.reset()
     eps_len, eps_ret = 0, 0
@@ -145,10 +183,33 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
         for t in range(steps_per_epoch):
 
             # Total steps ran
-            if (epoch * steps_per_epoch) + t <= exploration_steps:
+            steps_run = epoch * steps_per_epoch
+            if steps_run + t <= exploration_steps:
                 act = env.action_space.sample()
             else:
                 act = encode_action(actor_critic.act(obs))
+
+            obs_n, rew, done, _ = env.step(act)
+
+            rep_buffer.store(obs, act, obs_n, rew, done)
+            obs = obs_n
+
+            eps_len += 1
+            eps_ret += rew
+
+            terminal = done or eps_len == max_eps_len
+
+            if terminal:
+                eps_len_logs.append(eps_len)
+                eps_ret_logs.append(eps_ret)
+
+                obs, eps_ret, eps_len = env.reset(), 0, 0
+
+        # perform update
+        if steps_run > start_update and not steps_run % update_frequency:
+            # update
+            update()
+
         l_t = t  # log_time, start at 0
 
         logs = dict(RunTime=time.time() - start_time,
