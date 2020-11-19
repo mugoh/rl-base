@@ -203,27 +203,30 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
             Evaluate agent
         """
         # env = kwargs['test_env']
-        print('\n\nEvaluating agent')
+        print(f'\n\nEvaluating agent\nEpisodes[{eval_episodes}]: ', end='')
         all_eps_len, all_eps_ret = [], []
         for eps in range(eval_episodes):
+            print(f'{eps}', end=', ')
+
             eps_len, eps_ret, obs = 0, 0, env.reset()
-            act = actor_critic.act(torch.from_numpy(obs).float().to(device))
+            for _ in range(steps_per_epoch):
+                act = actor_critic.act(
+                    torch.from_numpy(obs).float().to(device))
 
-            obs_n, rew, done, _ = env.step(act)
+                obs_n, rew, done, _ = env.step(act)
 
-            obs = obs_n
-            eps_len += 1
-            eps_ret += rew
+                obs = obs_n
+                eps_len += 1
+                eps_ret += rew
 
-            if done or eps_len == max_eps_len:
-                all_eps_len.append(eps_len)
-                all_eps_ret.append(eps_ret)
+                if done or eps_len == max_eps_len:
+                    all_eps_len.append(eps_len)
+                    all_eps_ret.append(eps_ret)
 
-                eps_len, eps_ret, obs = 0, 0, env.reset()
+                    eps_len, eps_ret, obs = 0, 0, env.reset()
 
-                logger.add_scalar('Evaluation/Return', eps_ret, epoch)
-                logger.add_scalar('Evaluation/EpsLen', eps_len, epoch)
-                break
+                    logger.add_scalar('Evaluation/Return', eps_ret, epoch)
+                    logger.add_scalar('Evaluation/EpsLen', eps_len, epoch)
 
         return np.mean(all_eps_len), np.mean(all_eps_ret)
 
