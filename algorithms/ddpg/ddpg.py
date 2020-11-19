@@ -8,6 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch import optim
 
 import core
+from typing import Optional
 
 
 class ReplayBuffer:
@@ -107,6 +108,9 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
         batch_size (int): SGD mini batch size
 
         gamma (float): Rewards decay factor
+
+        polyyak (float): Factor for interpolation during updating
+            of target network
     """
 
     device = torch.device('cpu' if not torch.cuda.is_available else 'gpu')
@@ -128,6 +132,8 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
 
     q_optim = optim.Adam(q.parameters(), lr=q_lr)
     pi_optim = optim.Adam(pi.parameters(), lr=pi_lr)
+
+    q_loss_f = torch.nn.MSELoss()
 
     for param in q_target.parameters():
         param.grad = None
@@ -154,24 +160,68 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
         """
             Policy Loss function
         """
-        ...
+        states = data['obs']
+        return -(q(states, pi(states))).mean()
 
-    def compute_q__loss(data, gamma: float):
+    def compute_q_loss(data, gamma: float):
         """
             Q function loss
         """
         rew = data['rew']
         dones = data['dones']
         n_states = data['obs_n']
+        states = data['obs']
         target = rew + gamma * (1 - dones) * \
             q_target(n_states, pi_target(n_states))
+        loss = q_loss_f(q(states), target)
 
-    def update(self, main_args=args):
+        return loss
+
+    def zero_optim(optimizer, set_none: Optional[bool] = True):
+        """
+            Set Grads to None
+        """
+        if not set_none:
+            optimizer.zero_grad()
+            return
+        for group in optimizer.param_groups:
+            for param in group['params']:
+                param.grad = None
+
+    def update(n_epoch, main_args=args):
         """
             Policy and Q function update
         """
+
         data = rep_buffer.sample(main_args['batch_size'])
+
+        # update Q
+        zero_optim(q_optim)
+        q_loss = compute_q_loss(data, main_args['gamma'])
+        q_loss.backward()
+        q_optim.step()
+
+        # update pi
+
+        zero_optim(pi_optim)
         pi_loss = compute_pi_loss(data)
+        pi_loss.backward()
+        pi_optim.step()
+
+        logger.add_scalar('Loss/q', q_loss, n_epoch)
+        logger.add_scalar('Loss/pi', pi_loss, n_epoch)
+
+        polyyak = main_args['polyyak']
+        phi_params = actor_critic.parameters()
+        phi_target_params = ac_target.parameters()
+
+        # update target
+        for param, target_param in zip(
+            phi_params, phi_target_params
+        ):
+            # p(target) + (1 - p)param
+            target_param.mul_(polyyak)
+            target_param.add(param.mul(1-polyyak))
 
     start_time = time.time()
     obs = env.reset()
@@ -208,9 +258,9 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
         # perform update
         if steps_run > start_update and not steps_run % update_frequency:
             # update
-            update()
+            update(epoch)
 
-        l_t = t  # log_time, start at 0
+        l_t = epoch  # log_time, start at 0
 
         logs = dict(RunTime=time.time() - start_time,
                     AverageEpisodeLen=np.mean(eps_len_logs),
