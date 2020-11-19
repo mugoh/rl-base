@@ -59,7 +59,7 @@ class ReplayBuffer:
                    }
         samples = {
             k: torch.from_numpy(v).to(
-                self.device) for k, v in samples
+                self.device) for k, v in samples.items()
         }
 
         return samples
@@ -71,7 +71,7 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
          act_noise_std: float = .1, exploration_steps: int = 10000,
          update_frequency: int = 50, start_update: int = 1000,
          batch_size: int = 128, gamma: float = .99,
-         eval_episodes: int = 20,
+         eval_episodes: int = 20, polyyak: float = .995,
          ** args):
     """
         Args
@@ -121,7 +121,8 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    device = torch.device('cpu' if not torch.cuda.is_available else 'gpu')
+    device = torch.device(args.get('device'))if args.get('device') else\
+        torch.device('cpu' if not torch.cuda.is_available else 'cuda')
 
     act_dim = env.action_space.shape[0]
     obs_dim = env.observation_space.shape[0]
@@ -148,6 +149,7 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
 
         q_optim = optim.Adam(q.parameters(), lr=q_lr)
         pi_optim = optim.Adam(pi.parameters(), lr=pi_lr)
+        epoch_checkpoint = 0
 
     q, pi = actor_critic.q, actor_critic.pi
 
@@ -156,10 +158,10 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
     q_loss_f = torch.nn.MSELoss()
 
     for param in q_target.parameters():
-        param.grad = False
+        param.requires_grad = False
 
     for param in pi_target.parameters():
-        param.grad = False
+        param.requires_grad = False
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
     path = os.path.join(
@@ -176,6 +178,55 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
 
         return np.clip(action + epsilon, -act_limit, act_limit)
 
+    def save(epoch: int, path: str = 'model.pt'):
+        torch.save({
+            'epoch': epoch,
+            'ac': actor_critic.state_dict(),
+            'ac_target': ac_target.state_dict(),
+            'pi_optim': pi_optim.state_dict(),
+            'q_optim': q_optim.state_dict()
+        }, path)
+
+    def load(path: str = 'model.pt'):
+        """
+            Load saved model
+
+            Returns: (dict) Checkpoint key, value pairs
+                epoch, ac, ac_target, pi_optim, q_optim
+        """
+        ckpt = torch.load(path)
+
+        return ckpt
+
+    def eval_agent(epoch, kwargs=args):
+        """
+            Evaluate agent
+        """
+        # env = kwargs['test_env']
+        print('\n\nEvaluating agent')
+        all_eps_len, all_eps_ret = [], []
+        for eps in range(eval_episodes):
+            eps_len, eps_ret, obs = 0, 0, env.reset()
+            act = actor_critic.act(torch.from_numpy(obs).float().to(device))
+
+            obs_n, rew, done, _ = env.step(act)
+
+            obs = obs_n
+            eps_len += 1
+            eps_ret += rew
+
+            if done or eps_len == max_eps_len:
+                all_eps_len.append(eps_len)
+                all_eps_ret.append(eps_ret)
+
+                eps_len, eps_ret, obs = 0, 0, env.reset()
+
+                logger.add_scalar('Evaluation/Return', eps_ret, epoch)
+                logger.add_scalar('Evaluation/EpsLen', eps_len, epoch)
+                break
+
+        return np.mean(all_eps_len), np.mean(all_eps_ret)
+
     def compute_pi_loss(data):
         """
             Policy Loss function
@@ -191,9 +242,10 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         dones = data['dones']
         n_states = data['obs_n']
         states = data['obs']
+        actions = data['act']
         target = rew + gamma * (1 - dones) * \
             q_target(n_states, pi_target(n_states))
-        loss = q_loss_f(q(states), target)
+        loss = q_loss_f(q(states, actions), target)
 
         return loss
 
@@ -208,16 +260,16 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
             for param in group['params']:
                 param.grad = None
 
-    def update(n_epoch, main_args=args):
+    def update(n_epoch):
         """
             Policy and Q function update
         """
 
-        data = rep_buffer.sample(main_args['batch_size'])
+        data = rep_buffer.sample(batch_size)
 
         # update Q
         zero_optim(q_optim)
-        q_loss = compute_q_loss(data, main_args['gamma'])
+        q_loss = compute_q_loss(data, gamma)
         q_loss.backward()
         q_optim.step()
 
@@ -231,7 +283,6 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         logger.add_scalar('Loss/q', q_loss, n_epoch)
         logger.add_scalar('Loss/pi', pi_loss, n_epoch)
 
-        polyyak = main_args['polyyak']
         phi_params = actor_critic.parameters()
         phi_target_params = ac_target.parameters()
 
@@ -257,6 +308,7 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
             if steps_run + t <= exploration_steps:
                 act = env.action_space.sample()
             else:
+                obs = torch.from_numpy(obs).float().to(device)
                 act = encode_action(actor_critic.act(obs))
 
             obs_n, rew, done, _ = env.step(act)
@@ -280,11 +332,11 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
             # update
             update(epoch)
 
-        eval_eps_len, eval_eps_ret = eval(epoch)
-
         l_t = epoch  # log_time, start at 0
 
-        logs = dict(RunTime=time.time() - start_time,
+        eval_eps_len, eval_eps_ret = eval_agent(epoch)
+
+        logs = dict(Epoch=epoch,
                     AverageEpisodeLen=np.mean(eps_len_logs),
 
                     # MaxEpisodeLen = np.max(eps_len_logs)
@@ -292,8 +344,9 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
                     AverageEpsReturn=np.mean(eps_ret_logs),
                     MaxEpsReturn=np.max(eps_ret_logs),
                     MinEpsReturn=np.min(eps_ret_logs),
-                    EvalReturn=eval_eps_ret,
-                    EvalEpsLength=eval_eps_len
+                    EvalAvReturn=eval_eps_ret,
+                    EvalAvEpsLength=eval_eps_len,
+                    RunTime=time.time() - start_time
                     )
 
         logger.add_scalar('AvEpsLen', logs['AverageEpisodeLen'], l_t)
@@ -303,7 +356,7 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
 
         if t == 0:
             first_run_ret = logs['AverageEpsReturn']
-        logs['FirstEpsReturn'] = first_run_ret
+            logs['FirstEpsReturn'] = first_run_ret
 
         print('\n\n')
         print('-' * 15)
@@ -315,55 +368,14 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         if not epoch % args.get('save_frequency', 50) or epoch == epochs - 1:
             save(epoch)
 
-    def save(epoch: int, path: str = 'model.pt'):
-        torch.save({
-            'epoch': epoch,
-            'ac': actor_critic.state_dict(),
-            'ac_target': ac_target.state_dict(),
-            'pi_optim': pi_optim.state_dict(),
-            'q_optim': q_optim.state_dict()
-        }, path)
-
-    def load(path: str = 'model.pt'):
-        """
-            Load saved model
-
-            Returns: (dict) Checkpoint key, value pairs
-                epoch, ac, ac_target, pi_optim, q_optim
-        """
-        ckpt = torch.load(path)
-
-        return ckpt
-
-    def eval(epoch):
-        """
-            Evaluate agent
-        """
-        print('\n\nEvaluating agent')
-        for eps in range(eval_episodes):
-            eps_len, eps_ret, obs = 0, 0, env.reset()
-            act = actor_critic.act(obs)
-
-            obs_n, rew, done, _ = env.step(act)
-
-            obs = obs_n
-            eps_len += 1
-            eps_ret += rew
-
-            if done or eps_len == max_eps_len:
-                eps_len, eps_ret, obs = 0, 0, env.reset()
-
-                logger.add_scalar('Evaluation/Return', eps_ret, epoch)
-                logger.add_scalar('Evaluation/EpsLen', eps_len, epoch)
-
-                return eps_len, eps_ret
-
 
 def main():
     """
         DDPG run
     """
-    env = gym.make('HalfCheetah-v3')
+    en_nm = 'HalfCheetah-v3'
+    env = gym.make(en_nm)
+    test_env = gym.make(en_nm)
 
     ac_kwargs = {'hidden_sizes': [400, 400]}
     agent_args = {'env_name': 'HCv3'}
@@ -371,7 +383,10 @@ def main():
         'eval_episodes': 5,
         'seed': 0,
         'save_frequency': 20,
-        'load_model': False
+        'load_model': False,
+        'device': 'cpu',
+        'max_eps_len': 150,
+        'test_env': test_env
     }
 
     args = {'ac_kwargs': ac_kwargs, **agent_args, **train_args}

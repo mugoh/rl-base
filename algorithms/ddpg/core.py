@@ -50,7 +50,7 @@ class MLPQ(nn.Module):
     def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: list, activation: object):
         super(MLPQ, self).__init__()
 
-        self.q = mlp([obs_dim + act_dim], hidden_sizes + [1], activation)
+        self.q = mlp(obs_dim + act_dim, hidden_sizes + [1], activation)
 
     def forward(self, obs, act):
         inpt = torch.cat([obs, act], dim=-1)
