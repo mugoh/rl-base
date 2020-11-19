@@ -10,6 +10,8 @@ from torch import optim
 import core
 from typing import Optional
 
+import gym
+
 
 class ReplayBuffer:
     """
@@ -63,12 +65,13 @@ class ReplayBuffer:
         return samples
 
 
-def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCritic,
+def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1e5),
          steps_per_epoch: int = 5000, epochs: int = 100, max_eps_len: int = 1000,
-         pi_lr: float = 1e-4, q_lr: float = 1e-3,
+         pi_lr: float = 1e-4, q_lr: float = 1e-3, seed=0,
          act_noise_std: float = .1, exploration_steps: int = 10000,
-         update_frequency: int = 50, start_update: int = 10000,
+         update_frequency: int = 50, start_update: int = 1000,
          batch_size: int = 128, gamma: float = .99,
+         eval_episodes: int = 20,
          ** args):
     """
         Args
@@ -111,7 +114,12 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
 
         polyyak (float): Factor for interpolation during updating
             of target network
+
+        eval_episodes (int): Number of episodes to evaluate the agent
     """
+
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
     device = torch.device('cpu' if not torch.cuda.is_available else 'gpu')
 
@@ -119,27 +127,39 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
     obs_dim = env.observation_space.shape[0]
     act_limit = env.action_space.high[0]
 
+    memory_size = batch_size * epochs
     rep_buffer = ReplayBuffer(size=memory_size,
                               act_dim=act_dim,
                               obs_dim=obs_dim, device=device)
-    actor_critic = actor_critic(obs_dim,
-                                act_dim, act_limit,
-                                **ac_kwargs)
+    if args.get('load_model'):
+        ckpt = load()
+        actor_critic = ckpt['ac'].to(device)
+        ac_target = ckpt['ac_target'].to(device)
+        pi_optim = ckpt['pi_optim']
+        q_optim = ckpt['q_optim']
+        epoch_checkpoint = ckpt['epoch']
+    else:
+
+        actor_critic = actor_critic(obs_dim,
+                                    act_dim, act_limit,
+                                    **ac_kwargs).to(device)
+        q, pi = actor_critic.q, actor_critic.pi
+        ac_target = copy.deepcopy(actor_critic).to(device)
+
+        q_optim = optim.Adam(q.parameters(), lr=q_lr)
+        pi_optim = optim.Adam(pi.parameters(), lr=pi_lr)
+
     q, pi = actor_critic.q, actor_critic.pi
 
-    ac_target = copy.deepcopy(actor_critic)
     q_target, pi_target = ac_target.q, ac_target.pi
-
-    q_optim = optim.Adam(q.parameters(), lr=q_lr)
-    pi_optim = optim.Adam(pi.parameters(), lr=pi_lr)
 
     q_loss_f = torch.nn.MSELoss()
 
     for param in q_target.parameters():
-        param.grad = None
+        param.grad = False
 
     for param in pi_target.parameters():
-        param.grad = None
+        param.grad = False
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
     path = os.path.join(
@@ -227,7 +247,7 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
     obs = env.reset()
     eps_len, eps_ret = 0, 0
 
-    for epoch in range(epochs):
+    for epoch in range(epoch_checkpoint, epochs):
 
         eps_len_logs, eps_ret_logs = [], []
         for t in range(steps_per_epoch):
@@ -260,6 +280,8 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
             # update
             update(epoch)
 
+        eval_eps_len, eval_eps_ret = eval(epoch)
+
         l_t = epoch  # log_time, start at 0
 
         logs = dict(RunTime=time.time() - start_time,
@@ -269,7 +291,9 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
                     # MinEpsiodeLen = np.min(eps_len_logs)
                     AverageEpsReturn=np.mean(eps_ret_logs),
                     MaxEpsReturn=np.max(eps_ret_logs),
-                    MinEpsReturn=np.min(eps_ret_logs)
+                    MinEpsReturn=np.min(eps_ret_logs),
+                    EvalReturn=eval_eps_ret,
+                    EvalEpsLength=eval_eps_len
                     )
 
         logger.add_scalar('AvEpsLen', logs['AverageEpisodeLen'], l_t)
@@ -281,5 +305,79 @@ def ddpg(env, ac_kwargs={}, memory_size=int(1e5), actor_critic=core.MLPActorCrit
             first_run_ret = logs['AverageEpsReturn']
         logs['FirstEpsReturn'] = first_run_ret
 
+        print('\n\n')
+        print('-' * 15)
         for k, v in logs.items():
             print(k, v)
+
+        # Save model
+
+        if not epoch % args.get('save_frequency', 50) or epoch == epochs - 1:
+            save(epoch)
+
+    def save(epoch: int, path: str = 'model.pt'):
+        torch.save({
+            'epoch': epoch,
+            'ac': actor_critic.state_dict(),
+            'ac_target': ac_target.state_dict(),
+            'pi_optim': pi_optim.state_dict(),
+            'q_optim': q_optim.state_dict()
+        }, path)
+
+    def load(path: str = 'model.pt'):
+        """
+            Load saved model
+
+            Returns: (dict) Checkpoint key, value pairs
+                epoch, ac, ac_target, pi_optim, q_optim
+        """
+        ckpt = torch.load(path)
+
+        return ckpt
+
+    def eval(epoch):
+        """
+            Evaluate agent
+        """
+        print('\n\nEvaluating agent')
+        for eps in range(eval_episodes):
+            eps_len, eps_ret, obs = 0, 0, env.reset()
+            act = actor_critic.act(obs)
+
+            obs_n, rew, done, _ = env.step(act)
+
+            obs = obs_n
+            eps_len += 1
+            eps_ret += rew
+
+            if done or eps_len == max_eps_len:
+                eps_len, eps_ret, obs = 0, 0, env.reset()
+
+                logger.add_scalar('Evaluation/Return', eps_ret, epoch)
+                logger.add_scalar('Evaluation/EpsLen', eps_len, epoch)
+
+                return eps_len, eps_ret
+
+
+def main():
+    """
+        DDPG run
+    """
+    env = gym.make('HalfCheetah-v3')
+
+    ac_kwargs = {'hidden_sizes': [400, 400]}
+    agent_args = {'env_name': 'HCv3'}
+    train_args = {
+        'eval_episodes': 5,
+        'seed': 0,
+        'save_frequency': 20,
+        'load_model': False
+    }
+
+    args = {'ac_kwargs': ac_kwargs, **agent_args, **train_args}
+
+    ddpg(env,  **args)
+
+
+if __name__ == '__main__':
+    main()
