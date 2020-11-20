@@ -203,10 +203,9 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
             Evaluate agent
         """
         # env = kwargs['test_env']
-        print(f'\n\nEvaluating agent\nEpisodes[{eval_episodes}]: ', end='')
+        print(f'\n\nEvaluating agent\nEpisodes [{eval_episodes}]')
         all_eps_len, all_eps_ret = [], []
         for eps in range(eval_episodes):
-            print(f'{eps}', end=', ')
 
             eps_len, eps_ret, obs = 0, 0, env.reset()
             for _ in range(steps_per_epoch):
@@ -246,8 +245,9 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         n_states = data['obs_n']
         states = data['obs']
         actions = data['act']
-        target = rew + gamma * (1 - dones) * \
-            q_target(n_states, pi_target(n_states))
+        with torch.no_grad():
+            target = rew + gamma * (1 - dones) * \
+                q_target(n_states, pi_target(n_states))
         loss = q_loss_f(q(states, actions), target)
 
         return loss
@@ -290,12 +290,13 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         phi_target_params = ac_target.parameters()
 
         # update target
-        for param, target_param in zip(
-            phi_params, phi_target_params
-        ):
-            # p(target) + (1 - p)param
-            target_param.mul_(polyyak)
-            target_param.add(param.mul(1-polyyak))
+        with torch.no_grad():
+            for param, target_param in zip(
+                phi_params, phi_target_params
+            ):
+                # p(target) + (1 - p)param
+                target_param.mul_(polyyak)
+                target_param.add(param.mul(1-polyyak))
 
     start_time = time.time()
     obs = env.reset()
