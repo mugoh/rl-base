@@ -6,6 +6,8 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch import optim
+from torch import nn
+
 
 import core
 from typing import Optional
@@ -18,7 +20,7 @@ class ReplayBuffer:
         Memory for transitions
     """
 
-    def __init__(self, size=int(1e4), *, act_dim: int, obs_dim: int, device: object):
+    def __init__(self, size=int(1e5), *, act_dim: int, obs_dim: int, device: object):
         self.obs = np.zeros([size, obs_dim], dtype=np.float32)
         self.obs_n = np.zeros([size, obs_dim], dtype=np.float32)
         self.act = np.zeros([size,  act_dim], dtype=np.float32)
@@ -26,7 +28,8 @@ class ReplayBuffer:
         self.dones = np.zeros([size], dtype=np.float32)
 
         self.idx = 0
-        self.size = size
+        self.max_size = size
+        self.size = 0
         self.device = device
 
     def store(self, obs, act, obs_n, rew, done):
@@ -40,7 +43,8 @@ class ReplayBuffer:
         self.dones[idx] = done
         self.rewards[idx] = rew
 
-        self.idx = (self.idx + 1) % self.size
+        self.idx = (self.idx + 1) % self.max_size
+        self.size = min(self.size + 1, self.max_size)
 
     def sample(self, batch_size):
         """
@@ -49,7 +53,7 @@ class ReplayBuffer:
             Returns: dict of transitions
         """
 
-        idx = np.random.randint(self.size, size=batch_size)
+        idx = np.random.randint(0, self.size, size=batch_size)
 
         samples = {'obs': self.obs[idx],
                    'obs_n': self.obs_n[idx],
@@ -65,15 +69,17 @@ class ReplayBuffer:
         return samples
 
 
-def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1e5),
+def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1e6),
          steps_per_epoch: int = 5000, epochs: int = 100, max_eps_len: int = 1000,
-         pi_lr: float = 1e-4, q_lr: float = 1e-3, seed=0,
+         pi_lr: float = 1e-3, q_lr: float = 1e-3, seed=0,
          act_noise_std: float = .1, exploration_steps: int = 10000,
          update_frequency: int = 50, start_update: int = 1000,
          batch_size: int = 128, gamma: float = .99,
-         eval_episodes: int = 20, polyyak: float = .995,
+         eval_episodes: int = 5, polyyak: float = .995,
          ** args):
     """
+        Deep Deterministic Policy Gradients (DDPG)
+
         Args
         ---
         ac_kwargs (dict): Actor Critic module parameters
@@ -128,7 +134,6 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
     obs_dim = env.observation_space.shape[0]
     act_limit = env.action_space.high[0]
 
-    memory_size = batch_size * epochs
     rep_buffer = ReplayBuffer(size=memory_size,
                               act_dim=act_dim,
                               obs_dim=obs_dim, device=device)
@@ -139,6 +144,7 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         pi_optim = ckpt['pi_optim']
         q_optim = ckpt['q_optim']
         epoch_checkpoint = ckpt['epoch']
+        q, pi = actor_critic.q, actor_critic.pi
     else:
 
         actor_critic = actor_critic(obs_dim,
@@ -150,8 +156,6 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         q_optim = optim.Adam(q.parameters(), lr=q_lr)
         pi_optim = optim.Adam(pi.parameters(), lr=pi_lr)
         epoch_checkpoint = 0
-
-    q, pi = actor_critic.q, actor_critic.pi
 
     q_target, pi_target = ac_target.q, ac_target.pi
 
@@ -168,6 +172,8 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         'data', env.unwrapped.spec.id + args.get('env_name', '') + '_' + run_t)
 
     logger = SummaryWriter(log_dir=path)
+
+    q_losses, pi_losses = [], []
 
     def encode_action(action):
         """
@@ -222,10 +228,10 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
                     all_eps_len.append(eps_len)
                     all_eps_ret.append(eps_ret)
 
-                    eps_len, eps_ret, obs = 0, 0, env.reset()
+                    break
 
-                    logger.add_scalar('Evaluation/Return', eps_ret, epoch)
-                    logger.add_scalar('Evaluation/EpsLen', eps_len, epoch)
+            logger.add_scalar('Evaluation/Return', eps_ret, epoch)
+            logger.add_scalar('Evaluation/EpsLen', eps_len, epoch)
 
         return np.mean(all_eps_len), np.mean(all_eps_ret)
 
@@ -245,14 +251,16 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         n_states = data['obs_n']
         states = data['obs']
         actions = data['act']
+
+        q_pred = q(states, actions)
         with torch.no_grad():
             target = rew + gamma * (1 - dones) * \
                 q_target(n_states, pi_target(n_states))
-        loss = q_loss_f(q(states, actions), target)
+        loss = q_loss_f(q_pred, target)
 
         return loss
 
-    def zero_optim(optimizer, set_none: Optional[bool] = True):
+    def zero_optim(optimizer, set_none: Optional[bool] = False):
         """
             Set Grads to None
         """
@@ -263,12 +271,10 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
             for param in group['params']:
                 param.grad = None
 
-    def update(n_epoch):
+    def update(n_epoch, data):
         """
             Policy and Q function update
         """
-
-        data = rep_buffer.sample(batch_size)
 
         # update Q
         zero_optim(q_optim)
@@ -277,26 +283,34 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         q_optim.step()
 
         # update pi
+        for p in q.parameters():
+            p.requires_grad = False
 
         zero_optim(pi_optim)
         pi_loss = compute_pi_loss(data)
         pi_loss.backward()
         pi_optim.step()
 
-        logger.add_scalar('Loss/q', q_loss, n_epoch)
-        logger.add_scalar('Loss/pi', pi_loss, n_epoch)
+        nonlocal q_losses, pi_losses
 
-        phi_params = actor_critic.parameters()
-        phi_target_params = ac_target.parameters()
+        q_losses += [q_loss.item()]
+        pi_losses += [pi_loss.item()]
 
+        logger.add_scalar('Loss/q', q_loss.item(), n_epoch)
+        logger.add_scalar('Loss/pi', pi_loss.item(), n_epoch)
+
+        for p in q.parameters():
+            p.requires_grad = True
         # update target
         with torch.no_grad():
+            phi_params = actor_critic.parameters()
+            phi_target_params = ac_target.parameters()
             for param, target_param in zip(
                 phi_params, phi_target_params
             ):
                 # p(target) + (1 - p)param
-                target_param.mul_(polyyak)
-                target_param.add(param.mul(1-polyyak))
+                target_param.data.mul_(polyyak)
+                target_param.data.add_(param.data * (1-polyyak))
 
     start_time = time.time()
     obs = env.reset()
@@ -308,8 +322,8 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
         for t in range(steps_per_epoch):
 
             # Total steps ran
-            steps_run = epoch * steps_per_epoch
-            if steps_run + t <= exploration_steps:
+            steps_run = (epoch * steps_per_epoch) + t + 1
+            if steps_run <= exploration_steps:
                 act = env.action_space.sample()
             else:
                 obs = torch.from_numpy(obs).float().to(device)
@@ -331,14 +345,14 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
 
                 obs, eps_ret, eps_len = env.reset(), 0, 0
 
-        # perform update
-        if steps_run > start_update and not steps_run % update_frequency:
-            # update
-            update(epoch)
+            # perform update
+            if steps_run >= start_update and not steps_run % update_frequency:
+                data = rep_buffer.sample(batch_size)
+                # Keep ratio of env interactions to n_updates = 1
+                for _ in range(update_frequency):
+                    update(epoch, data)
 
         l_t = epoch  # log_time, start at 0
-
-        eval_eps_len, eval_eps_ret = eval_agent(epoch)
 
         logs = dict(Epoch=epoch,
                     AverageEpisodeLen=np.mean(eps_len_logs),
@@ -348,15 +362,24 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
                     AverageEpsReturn=np.mean(eps_ret_logs),
                     MaxEpsReturn=np.max(eps_ret_logs),
                     MinEpsReturn=np.min(eps_ret_logs),
-                    EvalAvReturn=eval_eps_ret,
-                    EvalAvEpsLength=eval_eps_len,
                     RunTime=time.time() - start_time
                     )
+
+        if args.get('evaluate_agent'):
+            eval_eps_len, eval_eps_ret = eval_agent(epoch)
+            logs['EvalAvEpsLength'] = eval_eps_len
+            logs['EvalAvReturn'] = eval_eps_ret
 
         logger.add_scalar('AvEpsLen', logs['AverageEpisodeLen'], l_t)
         logger.add_scalar('EpsReturn/Max', logs['MaxEpsReturn'], l_t)
         logger.add_scalar('EpsReturn/Min', logs['MinEpsReturn'], l_t)
         logger.add_scalar('EpsReturn/Average', logs['AverageEpsReturn'], l_t)
+
+        logger.add_scalar('Loss/Av-q', np.mean(q_losses), l_t)
+        logger.add_scalar('Loss/Av-pi', np.mean(pi_losses), l_t)
+
+        # Reset loss logs for next udpate
+        q_losses, pi_losses = [], []
 
         if t == 0:
             first_run_ret = logs['AverageEpsReturn']
@@ -377,20 +400,27 @@ def main():
     """
         DDPG run
     """
-    en_nm = 'HalfCheetah-v3'
+    en_nm = 'InvertedPendulum-v2'
     env = gym.make(en_nm)
     test_env = gym.make(en_nm)
 
-    ac_kwargs = {'hidden_sizes': [400, 400]}
-    agent_args = {'env_name': 'HCv3'}
+    ac_kwargs = {'hidden_sizes': [256, 256]
+                 }
+    agent_args = {'env_name': 'HCv2'}
     train_args = {
         'eval_episodes': 5,
         'seed': 0,
-        'save_frequency': 20,
+        'save_frequency': 120,
         'load_model': False,
         'device': 'cpu',
         'max_eps_len': 150,
-        'test_env': test_env
+        'test_env': test_env,
+        'evaluate_agent': False,
+        'q_lr': 1e-4,
+        'pi_lr': 1e-4,
+        'exploration_steps': 10000,
+        'steps_per_epoch': 1000,
+        'batch_size': 128
     }
 
     args = {'ac_kwargs': ac_kwargs, **agent_args, **train_args}

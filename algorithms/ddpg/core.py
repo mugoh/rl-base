@@ -59,7 +59,9 @@ class MLPQ(nn.Module):
 
 
 class MLPActorCritic(nn.Module):
-    def __init__(self, obs_dim: int, act_dim: int, act_limit: float, activation: object = nn.ReLU, hidden_sizes: list = [64, 64]):
+    def __init__(self, obs_dim: int, act_dim: int,
+                 act_limit: float, activation: object = nn.ReLU,
+                 hidden_sizes: list = [64, 64]):
         super(MLPActorCritic, self).__init__()
         self.q = MLPQ(obs_dim, act_dim, hidden_sizes, activation=activation)
         self.pi = MLPActor(obs_dim,
