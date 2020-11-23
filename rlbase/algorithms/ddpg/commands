@@ -1,0 +1,6 @@
+RUN
+1. D2RL + DDPG: steps per epoch - 5000, max_episode length - 1000
+     python3 ddpg.py -s 5000 -d2 -el 1000 -en D2RL
+
+2. DDPG: steps per epoch - 5000, max_episode length - 1000
+     python3 ddpg.py -s 5000 -el 1000 -en D2RL

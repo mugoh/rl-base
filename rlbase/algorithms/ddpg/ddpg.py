@@ -11,10 +11,9 @@ from torch import nn
 
 import core
 from typing import Optional
+import click
 
 import gym
-
-from rlbase.d2rl.d2rl import MLPActorCritic
 
 
 class ReplayBuffer:
@@ -398,7 +397,21 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
             save(epoch)
 
 
-def main():
+@click.command()
+@click.option('--d2rl', '-d2',
+              help='Whether to use D2RL architecutre',
+              is_flag=True)
+@click.option('--steps_per_epoch', '-s',
+              help='Total steps to run per epoch',
+              type=int)
+@click.option('--max_eps_len', '-el',
+              help='Total steps to run per episode' +
+              'before terminating',
+              type=int)
+@click.option('--env_name', '-en',
+              help='Name for data logs',
+              type=str)
+def main(**args):
     """
         DDPG run
     """
@@ -406,12 +419,22 @@ def main():
     env = gym.make(en_nm)
     test_env = gym.make(en_nm)
 
+    if args.get('d2rl'):
+        from rlbase.d2rl.d2rl import MLPActorCritic
+
+        ac = MLPActorCritic
+        hs = [256, 256, 256, 256, 256]
+    else:
+        hs = [256, 256]
+        ac = core.MLPActorCritic
+
+    # args.pop('d2rl')
     ac_kwargs = {
-        'hidden_sizes': [128, 128, 128, 128, 128]
+        'hidden_sizes': hs
     }
     agent_args = {
         'env_name': 'HCv2',
-        'actor_critic': MLPActorCritic
+        'actor_critic': core
     }
     train_args = {
         'eval_episodes': 5,
@@ -426,12 +449,15 @@ def main():
         'pi_lr': 1e-4,
         'exploration_steps': 10000,
         'steps_per_epoch': 1000,
-        'batch_size': 100
+        'batch_size': 128,
+
+        # Take care not to dispose `flag` types
+        **{k: v for k, v in args.items() if v}
     }
 
-    args = {'ac_kwargs': ac_kwargs, **agent_args, **train_args}
+    all_args = {'ac_kwargs': ac_kwargs,  **agent_args, **train_args}
 
-    ddpg(env,  **args)
+    ddpg(env,  **all_args)
 
 
 if __name__ == '__main__':
