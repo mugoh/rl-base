@@ -14,6 +14,8 @@ from typing import Optional
 
 import gym
 
+from d2rl import MLPActorCritic
+
 
 class ReplayBuffer:
     """
@@ -404,9 +406,13 @@ def main():
     env = gym.make(en_nm)
     test_env = gym.make(en_nm)
 
-    ac_kwargs = {'hidden_sizes': [256, 256]
-                 }
-    agent_args = {'env_name': 'HCv2'}
+    ac_kwargs = {
+        'hidden_sizes': [128, 128, 128, 128, 128]
+    }
+    agent_args = {
+        'env_name': 'HCv2',
+        'actor_critic': MLPActorCritic
+    }
     train_args = {
         'eval_episodes': 5,
         'seed': 0,
