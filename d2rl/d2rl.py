@@ -16,13 +16,15 @@ def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Ident
     if len(hidden_layers[:-1]) < size:
         hidden_layers[:-1] *= size
 
+    input_d = x
+
     for size in hidden_layers[:-1]:
         layer = nn.Linear(x, size)
         net_layers.append(layer)
         net_layers.append(activation())
-        x = size
+        x = size + input_d
 
-    net_layers.append(nn.Linear(x, hidden_layers[-1]))
+    net_layers.append(nn.Linear(hidden_layers[-2], hidden_layers[-1]))
     net_layers += [output_activation()]
 
     return nn.Sequential(*net_layers)
@@ -38,8 +40,6 @@ class PolicyMLP(nn.Module):
                  output_activation: Optional[object] = nn.Identity,
                  size: Optional[int] = 4):
         super(PolicyMLP, self).__init__()
-
-        hidden_sizes[:-1] = [obs_dim + s for s in hidden_sizes[:-1]]
 
         self.pi = mlp(obs_dim, hidden_sizes + [act_dim], activation,
                       size, output_activation)
@@ -75,8 +75,6 @@ class MLPQFunction(nn.Module):
                  output_activation: Optional[object] = nn.Identity,
                  size: Optional[int] = 4):
         super(MLPQFunction, self).__init__()
-
-        hidden_sizes[:-1] = [act_dim + obs_dim + s for s in hidden_sizes[:-1]]
 
         self.q = mlp(act_dim + obs_dim, hidden_sizes + [1],
                      activation, size, output_activation)
