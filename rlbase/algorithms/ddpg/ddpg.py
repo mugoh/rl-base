@@ -14,7 +14,7 @@ from typing import Optional
 
 import gym
 
-from d2rl import MLPActorCritic
+from rlbase.d2rl.d2rl import MLPActorCritic
 
 
 class ReplayBuffer:
