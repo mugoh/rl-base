@@ -426,7 +426,7 @@ def main():
         'pi_lr': 1e-4,
         'exploration_steps': 10000,
         'steps_per_epoch': 1000,
-        'batch_size': 128
+        'batch_size': 100
     }
 
     args = {'ac_kwargs': ac_kwargs, **agent_args, **train_args}

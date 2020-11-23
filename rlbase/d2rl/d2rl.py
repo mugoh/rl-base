@@ -1,15 +1,23 @@
 """
     D2RL Actor and Critic Architectures
 """
-from typing import Optional
+from typing import Optional, TypeVar, Iterable, Tuple
 
 import torch
 import torch.nn as nn
 
+T = TypeVar('T')
 
-def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
+
+def d2rl_mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
     """
         Multi-layer perceptron
+
+        The architecure is created by concatenating
+        the output of each FC with the input.
+
+        The result is then fed into the next layer
+        and the process repeated
     """
     net_layers = []
 
@@ -41,8 +49,8 @@ class PolicyMLP(nn.Module):
                  size: Optional[int] = 4):
         super(PolicyMLP, self).__init__()
 
-        self.pi = mlp(obs_dim, hidden_sizes + [act_dim], activation,
-                      size, output_activation)
+        self.pi = d2rl_mlp(obs_dim, hidden_sizes + [act_dim], activation,
+                           size, output_activation)
         self.act_limit = act_limit
 
     def forward(self, obs):
@@ -52,14 +60,21 @@ class PolicyMLP(nn.Module):
         # Don't concat last two layers
         # Remeber each layer has an activation function
         # So count = 4
-        for layer in self.pi[:-4]:
-            x = layer(obs)
-            x = torch.cat([x, obs], dim=-1)
 
-        for layer in self.pi[:-4]:
+        in_put = obs
+
+        for fc_layer, activation_f in group_layers(self.pi[:-4]):
+            x = fc_layer(obs)
+            x = activation_f(x)
+            x = torch.cat([x, in_put], dim=-1)
+
+            obs = x
+
+        for layer in self.pi[-4:]:
             x = layer(x)
 
         act = x
+
         return act * self.act_limit
 
 
@@ -70,33 +85,38 @@ class MLPQFunction(nn.Module):
         The action-value funtion
     """
 
-    def __init__(self, obs_dim: int, act_dim: int, *,
+    def __init__(self, obs_dim: int, act_dim: int,
+                 *,
                  hidden_sizes: list, activation: Optional[object] = nn.ReLU,
                  output_activation: Optional[object] = nn.Identity,
                  size: Optional[int] = 4):
         super(MLPQFunction, self).__init__()
 
-        self.q = mlp(act_dim + obs_dim, hidden_sizes + [1],
-                     activation, size, output_activation)
+        self.q = d2rl_mlp(act_dim + obs_dim, hidden_sizes + [1],
+                          activation, size, output_activation)
 
     def forward(self, obs, act):
         inpt = torch.cat([obs, act], dim=-1)
 
-        for layer in self.q[:-4]:
-            x = layer(inpt)
-            x = torch.cat([x, inpt], dim=-1)
+        inpt_d = inpt
+
+        for fc_layer, activation_f in group_layers(self.q[:-4]):
+            x = activation_f(fc_layer(inpt))
+            x = torch.cat([x, inpt_d], dim=1)
+
+            inpt = x
 
         # No concat for last 2 layers
         for layer in self.q[-4:]:
             x = layer(x)
 
-        out = x.unsqueeze()
+        out = x.squeeze()
 
         return out
 
 
 class MLPActorCritic(nn.Module):
-    def __init__(self, obs_dim: int, act_dim: int, act_limit: int = 1,
+    def __init__(self, obs_dim: int, act_dim: int, act_limit: int,
                  hidden_sizes: Optional[list] = [64, 64, 64, 64, 64],
                  activation: Optional[object] = nn.ReLU,
                  output_activation: Optional[object] = nn.Identity,
@@ -121,3 +141,19 @@ class MLPActorCritic(nn.Module):
             act = self.pi(obs)
 
         return act
+
+
+def group_layers(iterable: Iterable[T], n=2) -> Iterable[Tuple[T, ...]]:
+    """
+        Create iteration for D2RL forward pass.
+
+        This returns an iterator that gives every two
+        sequential elements grouped together. It's
+        useful for isolating Activation layers
+        from FCs in a Sequential model.
+
+        s -> (s0, s1, s1, s3) -> ((s0, s1), (s2, s3))
+
+        s -> (s0,s1,s2,...sn-1), (sn,sn+1,sn+2,...s2n-1), ...
+    """
+    return zip(*[iter(iterable)] * n)
