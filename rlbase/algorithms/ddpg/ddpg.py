@@ -415,7 +415,7 @@ def main(**args):
     """
         DDPG run
     """
-    en_nm = 'InvertedPendulum-v2'
+    en_nm = 'HalfCheetah-v2'
     env = gym.make(en_nm)
     test_env = gym.make(en_nm)
 
@@ -423,18 +423,21 @@ def main(**args):
         from rlbase.d2rl.d2rl import MLPActorCritic
 
         ac = MLPActorCritic
-        hs = [256, 256, 256, 256, 256]
+        hs = [32, 32, 32, 32]
+        s_z = 4
     else:
-        hs = [256, 256]
+        hs = [32, 32]
         ac = core.MLPActorCritic
+        s_z = 2
 
     # args.pop('d2rl')
     ac_kwargs = {
-        'hidden_sizes': hs
+        'hidden_sizes': hs,
+        'size': s_z
     }
     agent_args = {
         'env_name': 'HCv2',
-        'actor_critic': core
+        'actor_critic': ac
     }
     train_args = {
         'eval_episodes': 5,
