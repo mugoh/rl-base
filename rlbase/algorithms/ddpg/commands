@@ -4,3 +4,10 @@ RUN
 
 2. DDPG: steps per epoch - 5000, max_episode length - 1000
      python3 ddpg.py -s 5000 -el 1000 -en D2RL
+
+# Used in 4, 8 layers
+3. DDPG + D2RL
+    python3 ddpg.py -s 2500 -d2 -el 300 -en D2RL
+
+  DDPG:
+    python3 ddpg.py -s 2500 -el 300 -en D2RL

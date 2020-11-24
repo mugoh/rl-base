@@ -162,6 +162,8 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
 
     q_loss_f = torch.nn.MSELoss()
 
+    print(f'param counts: {core.count(actor_critic)}\n')
+
     for param in q_target.parameters():
         param.requires_grad = False
 
@@ -378,6 +380,7 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
 
         logger.add_scalar('Loss/Av-q', np.mean(q_losses), l_t)
         logger.add_scalar('Loss/Av-pi', np.mean(pi_losses), l_t)
+        logger.flush()
 
         # Reset loss logs for next udpate
         q_losses, pi_losses = [], []
@@ -423,12 +426,12 @@ def main(**args):
         from rlbase.d2rl.d2rl import MLPActorCritic
 
         ac = MLPActorCritic
-        hs = [32, 32, 32, 32]
-        s_z = 4
+        hs = [64, 64, 64, 64]
+        s_z = 8
     else:
-        hs = [32, 32]
+        hs = [64, 64, 64, 64]
         ac = core.MLPActorCritic
-        s_z = 2
+        s_z = 8
 
     # args.pop('d2rl')
     ac_kwargs = {
@@ -436,7 +439,7 @@ def main(**args):
         'size': s_z
     }
     agent_args = {
-        'env_name': 'HCv2',
+        'env_name': 'HCv2-size8',
         'actor_critic': ac
     }
     train_args = {

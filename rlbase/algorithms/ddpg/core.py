@@ -1,6 +1,8 @@
 import torch.nn as nn
 import torch
 
+import numpy as np
+
 
 def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
     """
@@ -21,6 +23,14 @@ def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Ident
     net_layers += [output_activation()]
 
     return nn.Sequential(*net_layers)
+
+
+def count(module: object):
+    """
+        Returns a count of the parameters
+        in a module
+    """
+    return np.sum([np.prod(p.shape) for p in module.parameters()])
 
 
 class MLPActor(nn.Module):

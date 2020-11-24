@@ -61,7 +61,7 @@ class PolicyMLP(nn.Module):
         # Remeber each layer has an activation function
         # So count = 4
 
-        in_put = obs
+        in_put = obs.clone().detach()
 
         for fc_layer, activation_f in group_layers(self.pi[:-4]):
             x = fc_layer(obs)
@@ -98,7 +98,7 @@ class MLPQFunction(nn.Module):
     def forward(self, obs, act):
         inpt = torch.cat([obs, act], dim=-1)
 
-        inpt_d = inpt
+        inpt_d = inpt.clone().detach()
 
         for fc_layer, activation_f in group_layers(self.q[:-4]):
             x = activation_f(fc_layer(inpt))
