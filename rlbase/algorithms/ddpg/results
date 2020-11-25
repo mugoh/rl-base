@@ -1,0 +1,7 @@
+D2RL does better in envs with more complexities
+
+In InvertedPendulum & HalfCheetah, ddpg performs better
+
+In Humanoid: 100K steps -> DDPG does better X [I tend to think this had to do with the LR.] Actually no, D2RL did better here. Learning for DDPG stopped at some point, maybe the high 1e-3 LR
+
+             500K steps -> D2RL does better
