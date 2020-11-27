@@ -1,4 +1,6 @@
-from ddpg import ReplayBuffer
+"""
+    Learning to Reset Agent
+"""
 
 import copy
 import time
@@ -11,6 +13,7 @@ from torch import optim
 from torch import nn
 
 import rlbase.algorithms.ddpg.core as core
+from rlbase.algorithms.ddpg.ddpg import ReplayBuffer
 
 from typing import Optional, Any, Mapping, List
 from dataclasses import dataclass
@@ -20,7 +23,7 @@ import gym
 
 
 @dataclass
-class DDPG:
+class Agent:
     env: object
     ac_kwargs: dict = {}
     actor_criticClass: object = core.MLPActorCritic
@@ -39,10 +42,15 @@ class DDPG:
     gamma: float = .99
     eval_episodes: int = 5
     polyyak: float = .995
+    s_reset: float = .7
+    q_min: float = 10.
+    n_resets: int = 1
+    epochs_per_policy: int = 1
 
     args: Mapping[Any, Any]
+
     """
-        Deep Deterministic Policy Gradients (DDPG)
+        DDPG agent
 
         Args
         ---
@@ -54,7 +62,9 @@ class DDPG:
         steps_per_epoch (int): Number of steps interact with the
             environment per episode
 
-        epochs (int): Number of updates to perform on the agent
+        epochs (int): Number of updates to perform on the agents
+            These are updates for both the forward and the reset
+            policy
 
         max_eps_len (int): Maximum length to have for each episode
             before it is terminated
@@ -86,6 +96,27 @@ class DDPG:
             of target network
 
         eval_episodes (int): Number of episodes to evaluate the agent
+
+        q_min (float): Minimum Q-value for a state to be considered
+            safe. If less than this value, the control is trasnffered
+            to the reset policy
+
+        n_resets (int): Number of soft reset attempts before making
+            a hard reset.
+
+            Increasing `n_resets` decreases the no. of hard resets
+            but may lead to the agent making unnessary reset attempts
+            on a state an early reset can't be done
+
+            In some environments, increasing it also lowers the
+            cumulutave reward
+
+        s_reset (float): The minimum reset policy reward for a state
+            to be considered in the safe set s_reset
+
+        epochs_per_policy (int): Number of episode updates to run
+            for each policy before switching to the other.
+            Defaults to 1 each
     """
 
     def __init__(self, **args):
@@ -95,6 +126,7 @@ class DDPG:
 
         device = torch.device(args.get('device')) if args.get('device') else \
             torch.device('cpu' if not torch.cuda.is_available else 'cuda')
+        self.args = args
 
         env = self.env
         act_dim = env.action_space.shape[0]
@@ -160,7 +192,7 @@ class DDPG:
 
         return np.clip(action + epsilon, -act_limit, act_limit)
 
-    def eval_agent(self, epoch, kwargs=args):
+    def eval_agent(self, epoch):
         """
             Evaluate agent
         """
@@ -203,6 +235,32 @@ class DDPG:
 
         return -(q(states, pi(states))).mean()
 
+    def save(self, epoch: int, model_data: dict, path: str = 'model.pt'):
+        """
+            Saves the model checkpoint
+            Pass the model data in the format:
+
+              {
+                'epoch': epoch,
+                'ac': actor_critic.state_dict(),
+                'ac_target': ac_target.state_dict(),
+                'pi_optim': pi_optim.state_dict(),
+                'q_optim': q_optim.state_dict()
+             }
+        """
+        torch.save(model_data, path)
+
+    def load(self, path: str = 'model.pt'):
+        """
+            Load saved model
+
+            Returns: (dict) Checkpoint key, value pairs
+                epoch, ac, ac_target, pi_optim, q_optim
+        """
+        ckpt = torch.load(path)
+
+        return ckpt
+
     def compute_q_loss(self, data, gamma: float, ac: List[object]):
         """
             Q function loss
@@ -222,8 +280,8 @@ class DDPG:
 
         q_pred = q(states, actions)
         with torch.no_grad():
-            target = rew + gamma * (1 - dones) * \
-                q_target(n_states, pi_target(n_states))
+            target = rew + gamma * (1 - dones) *
+            q_target(n_states, pi_target(n_states))
         loss = self.q_loss_f(q_pred, target)
 
         return loss
@@ -239,7 +297,7 @@ class DDPG:
             for param in group['params']:
                 param.grad = None
 
-    def update(self, n_epoch, data, ac_items: List[object], pi_optim: object, q_optim: object):
+    def update(self, n_epoch, data, ac_items: List[object], pi_optim: object, q_optim: object, name: str):
         """
             Policy and Q function update
 
@@ -248,7 +306,7 @@ class DDPG:
 
         ac, ac_target = ac_items
         # update Q
-        zero_optim(q_optim)
+        self.zero_optim(q_optim)
         q_loss = self.compute_q_loss(data, self.gamma, ac_items)
         q_loss.backward()
         q_optim.step()
@@ -257,7 +315,7 @@ class DDPG:
         for p in ac.q.parameters():
             p.requires_grad = False
 
-        zero_optim(pi_optim)
+        self.zero_optim(pi_optim)
         pi_loss = self.compute_pi_loss(data, ac)
         pi_loss.backward()
         pi_optim.step()
@@ -267,8 +325,8 @@ class DDPG:
         q_losses += [q_loss.item()]
         pi_losses += [pi_loss.item()]
 
-        self.logger.add_scalar('Loss/q', q_loss.item(), n_epoch)
-        self.logger.add_scalar('Loss/pi', pi_loss.item(), n_epoch)
+        self.logger.add_scalar(f'Loss/q-{name}', q_loss.item(), n_epoch)
+        self.logger.add_scalar('Loss/pi-{name}', pi_loss.item(), n_epoch)
 
         for p in ac.q.parameters():
             p.requires_grad = True
@@ -283,15 +341,116 @@ class DDPG:
                 target_param.data.mul_(self.polyyak)
                 target_param.data.add_(param.data * (1-self.polyyak))
 
-    def run_training_loop(self):
+    def run_training_loop(self, ac_items: List[object], policy_name: str):
         """
             Trains the agent by running the specified
             number of steps and agent udpates
+
+            Args:
+                ac_items (list): Actor critic and Target for the current policy
+                policy_name (str): The current policy (forward or reset)
         """
         start_time = time.time()
-        obs = env.reset()
+        obs = self.env.reset()
         eps_len, eps_ret = 0, 0
 
-        for epoch in range(epochs):
-            for t in range(steps_per_epoch):
-                ...
+        actor_critic, _ = ac_items
+
+        q_optim = 'q_reset_optim' if 'reset' in policy_name else 'q_optim'
+        pi_optim = 'pi_reset_optim' if 'reset' in q_optim else 'pi_optim'
+
+        q_optim = self.optimizers['q_optim']
+        pi_optim = self.optimizers['pi_optim']
+
+        for epoch in range(self.epochs_per_policy):
+
+            eps_len_logs, eps_ret_logs = [], []
+            for t in range(self.steps_per_epoch):
+
+                # Total steps ran
+                steps_run = (epoch * self.steps_per_epoch) + t + 1
+                if steps_run <= self.exploration_steps:
+                    act = self.env.action_space.sample()
+                else:
+                    obs = torch.from_numpy(obs).float().to(self.device)
+                    act = self.encode_action(actor_critic.act(obs))
+
+                obs_n, rew, done, _ = self.env.step(act)
+
+                self.rep_buffer.store(obs, act, obs_n, rew, done)
+                obs = obs_n
+
+                eps_len += 1
+                eps_ret += rew
+
+                terminal = done or eps_len == self.max_eps_len
+
+                if terminal:
+                    eps_len_logs.append(eps_len)
+                    eps_ret_logs.append(eps_ret)
+
+                    obs, eps_ret, eps_len = self.env.reset(), 0, 0
+
+                # perform update
+                if steps_run >= self.start_update and not steps_run % self.update_frequency:
+                    data = self.rep_buffer.sample(self.batch_size)
+                    # Keep ratio of env interactions to n_updates = 1
+                    for _ in range(self.update_frequency):
+                        self.update(epoch, data, ac_items,
+                                    q_optim=q_optim,
+                                    pi_optim=pi_optim,
+                                    name=policy_name)
+
+            l_t = epoch  # log_time, start at 0
+
+            logs = dict(Epoch=epoch,
+                        AverageEpisodeLen=np.mean(eps_len_logs),
+
+                        # MaxEpisodeLen = np.max(eps_len_logs)
+                        # MinEpsiodeLen = np.min(eps_len_logs)
+                        AverageEpsReturn=np.mean(eps_ret_logs),
+                        MaxEpsReturn=np.max(eps_ret_logs),
+                        MinEpsReturn=np.min(eps_ret_logs),
+                        RunTime=time.time() - start_time
+                        )
+
+            if self.args.get('evaluate_agent'):
+                eval_eps_len, eval_eps_ret = self.eval_agent(epoch)
+                logs[f'EvalAvEpsLength-{policy_name}'] = eval_eps_len
+                logs[f'EvalAvReturn-{policy_nameh}'] = eval_eps_ret
+
+            self.logger.add_scalar(
+                f'AvEpsLen-{policy_name}', logs['AverageEpisodeLen'], l_t)
+            self.logger.add_scalar(
+                f'EpsReturn/Max-{policy_name}',
+                logs['MaxEpsReturn'], l_t)
+            self.logger.add_scalar(
+                f'EpsReturn/Min-{policy_name}',
+                logs['MinEpsReturn'], l_t)
+            self.logger.add_scalar(f'EpsReturn/Average-{policy_name}',
+                                   logs['AverageEpsReturn'], l_t)
+
+            self.logger.add_scalar(
+                f'Loss/Av-q-{policy_name}',
+                np.mean(q_losses), l_t)
+            self.logger.add_scalar(
+                f'Loss/Av-pi-{policy_name}', np.mean(pi_losses), l_t)
+            self.logger.flush()
+
+            # Reset loss logs for next udpate
+            q_losses, pi_losses = [], []
+
+            if t == 0:
+                first_run_ret = logs['AverageEpsReturn']
+                logs['FirstEpsReturn'] = first_run_ret
+
+            print('\n\n')
+            print('-' * 15)
+            for k, v in logs.items():
+                print(k, v)
+
+            # Save model
+
+            # TODO Move this to outer loop
+            if not epoch % self.args.get('save_frequency', 50) or epoch == self.epochs_per_policy - 1:
+                self.save(epoch)
