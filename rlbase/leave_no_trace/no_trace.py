@@ -117,6 +117,7 @@ class Agent:
         epochs_per_policy (int): Number of episode updates to run
             for each policy before switching to the other.
             Defaults to 1 each
+
     """
 
     def __init__(self, **args):
@@ -341,7 +342,17 @@ class Agent:
                 target_param.data.mul_(self.polyyak)
                 target_param.data.add_(param.data * (1-self.polyyak))
 
-    def run_training_loop(self, ac_items: List[object], policy_name: str):
+    def train_agent(self):
+        """
+            Trains the forward and reset policies
+        """
+
+        for epoch in range(self.epochs):
+            # Train forward policy
+            ...
+
+    def run_training_loop(self, ac_items: List[object], policy_name: str,
+                          global_epoch: int):
         """
             Trains the agent by running the specified
             number of steps and agent udpates
@@ -369,11 +380,23 @@ class Agent:
 
                 # Total steps ran
                 steps_run = (epoch * self.steps_per_epoch) + t + 1
-                if steps_run <= self.exploration_steps:
+                run_policy = steps_run <= self.exploration_steps
+                if run_policy:
                     act = self.env.action_space.sample()
                 else:
                     obs = torch.from_numpy(obs).float().to(self.device)
                     act = self.encode_action(actor_critic.act(obs))
+
+                # If this is the forward policy
+                # and Q < Q min
+                # switch to reset policy
+
+                if to_reset and run_policy:
+                    rst_q_value = self.actor_critic_reset.q(obs, act)
+
+                    if rst_q_value < self.q_min:
+                        # soft reset
+                        act = self.actor_critic_reset.act(obs)
 
                 obs_n, rew, done, _ = self.env.step(act)
 
@@ -401,9 +424,9 @@ class Agent:
                                     pi_optim=pi_optim,
                                     name=policy_name)
 
-            l_t = epoch  # log_time, start at 0
+            l_t = global_epoch  # log_time, start at 0
 
-            logs = dict(Epoch=epoch,
+            logs = dict(Epoch=l_t,
                         AverageEpisodeLen=np.mean(eps_len_logs),
 
                         # MaxEpisodeLen = np.max(eps_len_logs)
@@ -446,11 +469,12 @@ class Agent:
 
             print('\n\n')
             print('-' * 15)
+            print(policy_name, '\n')
             for k, v in logs.items():
                 print(k, v)
 
             # Save model
 
             # TODO Move this to outer loop
-            if not epoch % self.args.get('save_frequency', 50) or epoch == self.epochs_per_policy - 1:
-                self.save(epoch)
+            if not global_epoch % self.args.get('save_frequency', 50) or global_epoch == self.epochs_per_policy - 1:
+                self.save(global_epoch)
