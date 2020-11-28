@@ -141,6 +141,9 @@ class Agent:
         self.rep_buffer = ReplayBuffer(size=self.memory_size,
                                        act_dim=act_dim,
                                        obs_dim=obs_dim, device=device)
+        self.rep_buffer_reset = ReplayBuffer(size=self.memory_size,
+                                             act_dim=act_dim,
+                                             obs_dim=obs_dim, device=device)
 
         self.actor_critic = self.actor_criticClass(obs_dim,
                                                    act_dim, act_limit,
@@ -349,7 +352,15 @@ class Agent:
 
         for epoch in range(self.epochs):
             # Train forward policy
-            ...
+            self.run_training_loop([self.actor_critic, self.ac_target],
+                                   policy_name='forward',
+                                   epoch)
+
+            # Train reset policy
+
+            self.run_training_loop([self.actor_critic_reset, self.ac_target_reset],
+                                   'reset',
+                                   epoch)
 
     def run_training_loop(self, ac_items: List[object], policy_name: str,
                           global_epoch: int):
@@ -387,20 +398,30 @@ class Agent:
                     obs = torch.from_numpy(obs).float().to(self.device)
                     act = self.encode_action(actor_critic.act(obs))
 
-                # If this is the forward policy
-                # and Q < Q min
-                # switch to reset policy
+                    # If this is the forward policy
+                    # and Q < Q min
+                    # switch to reset policy
 
                 if to_reset and run_policy:
-                    rst_q_value = self.actor_critic_reset.q(obs, act)
 
-                    if rst_q_value < self.q_min:
-                        # soft reset
-                        act = self.actor_critic_reset.act(obs)
+                    for attempt in range(self.n_resets):
+                        rst_q_value = self.actor_critic_reset.q(obs, act)
+
+                        if rst_q_value < self.q_min:
+                            # soft reset
+                            act = self.actor_critic_reset.act(obs)
+                        else:
+                            break
+                        if attempt == self.n_resets:
+                            terminal = True
 
                 obs_n, rew, done, _ = self.env.step(act)
+                if 'reset' in policy_name:
+                    # Train reset policy
+                    self.rep_buffer_reset.store(obs, act, obs_n, done)
 
-                self.rep_buffer.store(obs, act, obs_n, rew, done)
+                else:
+                    self.rep_buffer.store(obs, act, obs_n, rew, done)
                 obs = obs_n
 
                 eps_len += 1
@@ -416,7 +437,8 @@ class Agent:
 
                 # perform update
                 if steps_run >= self.start_update and not steps_run % self.update_frequency:
-                    data = self.rep_buffer.sample(self.batch_size)
+                    memory_ = self.rep_buffer.sample if 'forward' in policy_name else self.rep_buffer_reset.sample
+                    data = memory_(self.batch_size)
                     # Keep ratio of env interactions to n_updates = 1
                     for _ in range(self.update_frequency):
                         self.update(epoch, data, ac_items,
