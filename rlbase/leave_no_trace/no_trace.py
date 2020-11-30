@@ -302,8 +302,7 @@ class Agent:
                 param.grad = None
 
     def update(self, n_epoch, data, ac_items: List[object], pi_optim: object, q_optim: object, name: str):
-        """
-            Policy and Q function update
+        """ Policy and Q function update
 
             ac: [ac, ac_target] Current actor critic
         """
@@ -346,8 +345,8 @@ class Agent:
                 target_param.data.add_(param.data * (1-self.polyyak))
 
     def train_agent(self):
-        """
-            Trains the forward and reset policies
+        """ Trains the forward and reset policies
+
         """
 
         for epoch in range(self.epochs):
@@ -364,8 +363,7 @@ class Agent:
 
     def run_training_loop(self, ac_items: List[object], policy_name: str,
                           global_epoch: int):
-        """
-            Trains the agent by running the specified
+        """ Trains the agent by running the specified
             number of steps and agent udpates
 
             Args:
@@ -375,6 +373,7 @@ class Agent:
         start_time = time.time()
         obs = self.env.reset()
         eps_len, eps_ret = 0, 0
+        hard_reset_count, soft_reset_count = 0, 0
 
         actor_critic, _ = ac_items
 
@@ -384,15 +383,17 @@ class Agent:
         q_optim = self.optimizers['q_optim']
         pi_optim = self.optimizers['pi_optim']
 
+        eps_len_logs, eps_ret_logs = [], []
+        hard_reset_logs, soft_reset_logs = [], []
+
         for epoch in range(self.epochs_per_policy):
 
-            eps_len_logs, eps_ret_logs = [], []
             for t in range(self.steps_per_epoch):
 
                 # Total steps ran
                 steps_run = (epoch * self.steps_per_epoch) + t + 1
-                run_policy = steps_run <= self.exploration_steps
-                if run_policy:
+                random_policy = steps_run <= self.exploration_steps
+                if random_policy:
                     act = self.env.action_space.sample()
                 else:
                     obs = torch.from_numpy(obs).float().to(self.device)
@@ -402,7 +403,7 @@ class Agent:
                     # and Q < Q min
                     # switch to reset policy
 
-                if to_reset and run_policy:
+                if to_reset and not random_policy:
 
                     for attempt in range(self.n_resets):
                         rst_q_value = self.actor_critic_reset.q(obs, act)
@@ -411,17 +412,21 @@ class Agent:
                             # soft reset
                             act = self.actor_critic_reset.act(obs)
                         else:
+                            soft_reset_count += 1
                             break
-                        if attempt == self.n_resets:
-                            terminal = True
+                        if attempt == self.n_resets - 1:
+                            hard_reset_count += 1
+                            hard_reset = True
 
                 obs_n, rew, done, _ = self.env.step(act)
+
                 if 'reset' in policy_name:
                     # Train reset policy
                     self.rep_buffer_reset.store(obs, act, obs_n, done)
 
                 else:
                     self.rep_buffer.store(obs, act, obs_n, rew, done)
+
                 obs = obs_n
 
                 eps_len += 1
@@ -429,11 +434,15 @@ class Agent:
 
                 terminal = done or eps_len == self.max_eps_len
 
-                if terminal:
+                if terminal or hard_reset:
                     eps_len_logs.append(eps_len)
                     eps_ret_logs.append(eps_ret)
 
+                    hard_reset_logs.append(hard_reset_count)
+                    soft_reset_logs.append(soft_reset_count)
+
                     obs, eps_ret, eps_len = self.env.reset(), 0, 0
+                    hard_reset_count, soft_reset_count  0, 0
 
                 # perform update
                 if steps_run >= self.start_update and not steps_run % self.update_frequency:
@@ -454,6 +463,8 @@ class Agent:
                         # MaxEpisodeLen = np.max(eps_len_logs)
                         # MinEpsiodeLen = np.min(eps_len_logs)
                         AverageEpsReturn=np.mean(eps_ret_logs),
+                        HardResets=hard_reset_logs,
+                        SoftResets=soft_reset_logs,
                         MaxEpsReturn=np.max(eps_ret_logs),
                         MinEpsReturn=np.min(eps_ret_logs),
                         RunTime=time.time() - start_time
@@ -463,6 +474,11 @@ class Agent:
                 eval_eps_len, eval_eps_ret = self.eval_agent(epoch)
                 logs[f'EvalAvEpsLength-{policy_name}'] = eval_eps_len
                 logs[f'EvalAvReturn-{policy_nameh}'] = eval_eps_ret
+            if 'forward' in policy_name:
+                self.logger.add_scalar(
+                    'HardResetCount', logs['HardResets'], l_t)
+                self.logger.add_scalar(
+                    'SoftResetCount', logs['SoftResets'], l_t)
 
             self.logger.add_scalar(
                 f'AvEpsLen-{policy_name}', logs['AverageEpisodeLen'], l_t)
