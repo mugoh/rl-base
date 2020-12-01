@@ -26,16 +26,16 @@ import gym
 class Agent:
     env: object
     ac_kwargs: dict = {}
-    actor_criticClass: object = core.MLPActorCritic
+    actor_critic_class: object = core.MLPActorCritic
     memory_size: int = int(1e6)
-    steps_per_epoch: int = 5000
+    steps_per_epoch: int = 500
     epochs: int = 100
-    max_eps_len: int = 1000
-    pi_lr: float = 1e-3
-    q_lr: float = 1e-3
+    max_eps_len: int = 150
+    pi_lr: float = 1e-4
+    q_lr: float = 1e-4
     seed: int = 0
     act_noise_std: float = .1
-    exploration_steps: int = 10000
+    exploration_steps: int = 1000
     update_frequency: int = 50
     start_update: int = 1000
     batch_size: int = 128
@@ -120,7 +120,7 @@ class Agent:
 
     """
 
-    def __init__(self, **args):
+    def __init__(self, env,  **args):
 
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
@@ -128,6 +128,7 @@ class Agent:
         device = torch.device(args.get('device')) if args.get('device') else \
             torch.device('cpu' if not torch.cuda.is_available else 'cuda')
         self.args = args
+        ac_kwargs = args['ac_kwargs']
 
         env = self.env
         act_dim = env.action_space.shape[0]
@@ -145,12 +146,12 @@ class Agent:
                                              act_dim=act_dim,
                                              obs_dim=obs_dim, device=device)
 
-        self.actor_critic = self.actor_criticClass(obs_dim,
-                                                   act_dim, act_limit,
-                                                   **ac_kwargs).to(device)
-        self.actor_critic_reset = self.actor_criticClass(obs_dim,
-                                                         act_dim, act_limit,
-                                                         **ac_kwargs).to(device)
+        self.actor_critic = self.actor_critic_class(obs_dim,
+                                                    act_dim, act_limit,
+                                                    **ac_kwargs).to(device)
+        self.actor_critic_reset = self.actor_critic_class(obs_dim,
+                                                          act_dim, act_limit,
+                                                          **ac_kwargs).to(device)
         self.ac_target = copy.deepcopy(self.actor_critic).to(device)
         self.ac_target_reset = copy.deepcopy(
             self.actor_critic_reset).to(device)
@@ -184,7 +185,7 @@ class Agent:
 
         self.logger = SummaryWriter(log_dir=path)
 
-        q_losses, pi_losses = [], []
+        self.q_losses, self.pi_losses = [], []
 
     def encode_action(self, action):
         """
@@ -284,8 +285,8 @@ class Agent:
 
         q_pred = q(states, actions)
         with torch.no_grad():
-            target = rew + gamma * (1 - dones) *
-            q_target(n_states, pi_target(n_states))
+            target = rew + gamma * (1 - dones) * \
+                q_target(n_states, pi_target(n_states))
         loss = self.q_loss_f(q_pred, target)
 
         return loss
@@ -323,10 +324,8 @@ class Agent:
         pi_loss.backward()
         pi_optim.step()
 
-        nonlocal q_losses, pi_losses
-
-        q_losses += [q_loss.item()]
-        pi_losses += [pi_loss.item()]
+        self.q_losses += [q_loss.item()]
+        self.pi_losses += [pi_loss.item()]
 
         self.logger.add_scalar(f'Loss/q-{name}', q_loss.item(), n_epoch)
         self.logger.add_scalar('Loss/pi-{name}', pi_loss.item(), n_epoch)
@@ -353,7 +352,7 @@ class Agent:
             # Train forward policy
             self.run_training_loop([self.actor_critic, self.ac_target],
                                    policy_name='forward',
-                                   epoch)
+                                   global_epoch=epoch)
 
             # Train reset policy
 
@@ -386,12 +385,14 @@ class Agent:
         eps_len_logs, eps_ret_logs = [], []
         hard_reset_logs, soft_reset_logs = [], []
 
+        to_reset = 'forward' in policy_name
+
         for epoch in range(self.epochs_per_policy):
 
             for t in range(self.steps_per_epoch):
 
                 # Total steps ran
-                steps_run = (epoch * self.steps_per_epoch) + t + 1
+                steps_run = (global_epoch * self.steps_per_epoch) + t + 1
                 random_policy = steps_run <= self.exploration_steps
                 if random_policy:
                     act = self.env.action_space.sample()
@@ -422,7 +423,7 @@ class Agent:
 
                 if 'reset' in policy_name:
                     # Train reset policy
-                    self.rep_buffer_reset.store(obs, act, obs_n, done)
+                    self.rep_buffer_reset.store(obs, act, obs_n, rew, done)
 
                 else:
                     self.rep_buffer.store(obs, act, obs_n, rew, done)
@@ -442,12 +443,14 @@ class Agent:
                     soft_reset_logs.append(soft_reset_count)
 
                     obs, eps_ret, eps_len = self.env.reset(), 0, 0
-                    hard_reset_count, soft_reset_count  0, 0
+                    hard_reset_count, soft_reset_count = 0, 0
 
                 # perform update
                 if steps_run >= self.start_update and not steps_run % self.update_frequency:
-                    memory_ = self.rep_buffer.sample if 'forward' in policy_name else self.rep_buffer_reset.sample
+                    memory_ = self.rep_buffer.sample if 'forward' in policy_name\
+                        else self.rep_buffer_reset.sample
                     data = memory_(self.batch_size)
+
                     # Keep ratio of env interactions to n_updates = 1
                     for _ in range(self.update_frequency):
                         self.update(epoch, data, ac_items,
@@ -473,7 +476,7 @@ class Agent:
             if self.args.get('evaluate_agent'):
                 eval_eps_len, eval_eps_ret = self.eval_agent(epoch)
                 logs[f'EvalAvEpsLength-{policy_name}'] = eval_eps_len
-                logs[f'EvalAvReturn-{policy_nameh}'] = eval_eps_ret
+                logs[f'EvalAvReturn-{policy_name}'] = eval_eps_ret
             if 'forward' in policy_name:
                 self.logger.add_scalar(
                     'HardResetCount', logs['HardResets'], l_t)
@@ -493,13 +496,13 @@ class Agent:
 
             self.logger.add_scalar(
                 f'Loss/Av-q-{policy_name}',
-                np.mean(q_losses), l_t)
+                np.mean(self.q_losses), l_t)
             self.logger.add_scalar(
-                f'Loss/Av-pi-{policy_name}', np.mean(pi_losses), l_t)
+                f'Loss/Av-pi-{policy_name}', np.mean(self.pi_losses), l_t)
             self.logger.flush()
 
             # Reset loss logs for next udpate
-            q_losses, pi_losses = [], []
+            self.q_losses, self.pi_losses = [], []
 
             if t == 0:
                 first_run_ret = logs['AverageEpsReturn']
@@ -513,6 +516,54 @@ class Agent:
 
             # Save model
 
-            # TODO Move this to outer loop
-            if not global_epoch % self.args.get('save_frequency', 50) or global_epoch == self.epochs_per_policy - 1:
-                self.save(global_epoch)
+            if not global_epoch % self.args.get('save_frequency', 50) \
+                    or global_epoch == self.epochs_per_policy - 1:
+                ...
+                """data = {
+                    'epoch': global_epoch,
+                    'forward': [
+                        self.actor_critic.state_dict(),
+                        self.ac_target.state_dict()],
+                    'reset': [
+                        self.actor_critic_reset.state_dict(),
+                        self.ac_target_reset.state_dict()],
+                    'optims': {k: v.state_dict() for k, v in self.optimizers.items()}
+                }
+                self.save(global_epoch, data, path='no_trace_model.pt') """
+
+
+def main():
+    """
+        Leave no Trace
+    """
+    env = gym.make('HalfCheetah-v2')
+
+    ac_kwargs = {
+        'hidden_sizes': [64, 64, 64, 64],
+        'size': 4
+    }
+    agent_args = {
+        'env_name': 'HCv2'
+    }
+    train_args = {
+        'eval_episodes': 5,
+        'seed': 0,
+        'save_frequency': 120,
+        'load_model': False,
+        'device': 'cpu',
+        'max_eps_len': 150,
+        'evaluate_agent': False,
+        'q_lr': 1e-4,
+        'pi_lr': 1e-4,
+        'exploration_steps': 1000,
+        'steps_per_epoch': 500,
+        'batch_size': 128,
+    }
+
+    all_args = {'ac_kwargs': ac_kwargs,  **agent_args, **train_args}
+    agent = Agent(env, args=all_args)
+    agent.train_agent()
+
+
+if __name__ == '__main__':
+    main()
