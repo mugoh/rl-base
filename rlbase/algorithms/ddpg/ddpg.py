@@ -418,7 +418,7 @@ def main(**args):
     """
         DDPG run
     """
-    en_nm = 'Humanoid-v3'
+    en_nm = 'HalfCheetah-v2'
     env = gym.make(en_nm)
     test_env = gym.make(en_nm)
 
@@ -429,9 +429,9 @@ def main(**args):
         hs = [128, 128, 128, 128, 128, 128, 128, 128, ]
         s_z = 8
     else:
-        hs = [128, 128, 128, 128]
+        hs = [128, 128, 128, 128, 128, 128, 128, 128]
         ac = core.MLPActorCritic
-        s_z = 4
+        s_z = 8
 
     # args.pop('d2rl')
     ac_kwargs = {
