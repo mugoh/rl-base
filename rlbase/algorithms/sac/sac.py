@@ -4,6 +4,8 @@ import numpy as np
 
 import copy
 
+import core
+
 
 class ReplayBuffer:
     """
@@ -85,3 +87,5 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
     # Init pi and Qs parameters
     actor_critic = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
     ac_target = copy.deepcopy(actor_critic).to(device)
+
+    print(f'Param counts: {core.count(actor_critic)}\n')
