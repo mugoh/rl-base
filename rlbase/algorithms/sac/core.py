@@ -28,7 +28,7 @@ class MLPActor(nn.Module):
         return self.pi(state)
 
 
-class MLPQ(nn.Module):
+class MLPCritic(nn.Module):
     """
         Q(s, a): State-Action value function
     """
@@ -40,3 +40,23 @@ class MLPQ(nn.Module):
         obs_act = torch.cat([obs, action], dim=-1)
 
         return self.q(obs_act).squeeze(-1)
+
+
+class MLPActorCritic(nn.module):
+    def __init__(self, obs_dim: int, act_dim: int, activation: object = nn.ReLU,
+                 hidden_sizes: list = [64, 64],
+                 size: int = 2):
+        super(MLPActorCritic, self).__init__()
+
+        self.q_1 = MLPCritic(obs_dim, act_dim, hidden_sizes, activation)
+        self.q_2 = MLPCritic(obs_dim, act_dim, hidden_sizes, activation)
+
+        self.pi = MLPActor(obs_dim, act_dim, hidden_sizes, activation)
+
+    def act(self, obs):
+        """
+            Select action for given observation with
+            the current policy
+        """
+        with torch.no_grad():
+            return self.pi(obs).numpy().cpu()
