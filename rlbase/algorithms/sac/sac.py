@@ -75,6 +75,8 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         steps_per_epoch: int = 5000,
         epochs: int = 100,
         batch_size: int = 64, alpha: float = .05,
+        q_lr: float = 1e-3,
+        pi_lr: float = 1e-4,
         seed: int = 1, **args):
     """
         Soft Actor Critic
@@ -109,6 +111,10 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
             It is used for exploration-exploitation trade-off.
             A high value of alpha results in higher exploration
 
+        q_lr (float): Q function learning rate
+
+        pi_lr (float): Policy learning rate
+
     """
 
     np.random.seed(seed)
@@ -128,6 +134,11 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
     ac_target = copy.deepcopy(actor_critic).to(device)
 
     q_loss_f = nn.MSELoss()
+
+    q_params = list(actor_critic.q_1.parameters) + \
+        list(actor_critic.q_2.parameters())
+    q_optim = torch.optim.Adam(q_params, lr=q_lr)
+    pi_optim = torch.optim.Adam(actor_critic.pi.parameters(), pi_lr)
 
     print(f'Param counts: {core.count(actor_critic)}\n')
 
@@ -179,7 +190,20 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
 
     def update(data):
         """Updates the policy and Q functions"""
+        zero_optim(q_optim)
         q1_loss, q2_loss = compute_q_loss(data)
+
+        q1_loss.backward()
+        q2_loss.backward()
+
+        q_optim.step()
+
+        # update pi
+        for p in actor_critic.q_1.parameters():
+            p.requires_grad = False
+
+        for p in actor_critic.q_2.parameters():
+            p.requires_grad = False
 
     eps_len, eps_ret = 0
 
