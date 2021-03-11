@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch import distributions
 
 import numpy as np
 
@@ -13,19 +14,63 @@ def count(module: object):
     return np.sum([np.prod(p.shape) for p in module.parameters()])
 
 
+def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Identity):
+    """
+        Multi-layer perceptron
+    """
+    net_layers = []
+
+    if len(hidden_layers[:-1]) < size:
+        hidden_layers[:-1] *= size
+
+    for size in hidden_layers[:-1]:
+        layer = nn.Linear(x, size)
+        net_layers.append(layer)
+        net_layers.append(activation())
+        x = size
+
+    net_layers.append(nn.Linear(x, hidden_layers[-1]))
+    net_layers += [output_activation()]
+
+    return nn.Sequential(*net_layers)
+
+
 class MLPActor(nn.Module):
     """
         Policy: Selects actions given states
+        u_theta(s) + sigma_theta(s) * noise
     """
 
     def __init__(self, obs_dim: int, act_dim: int,  hidden_sizes: list,  activation: object):
         super(MLPActor, self).__init__()
 
-        self.pi = mlp(obs_dim, hidden_sizes + [act_dim],
-                      activation=activation, output_activation=nn.Tanh)
+        self.logits = mlp(obs_dim, hidden_sizes + [act_dim],
+                          activation=nn.Tanh)
 
-    def forward(self, state):
-        return self.pi(state)
+        self.log_std = mlp(obs_dim, hidden_sizes + [act_dim])
+        self.squash_f = nn.Tanh()
+        self._act_dim = act_dim
+
+    def sample_policy(self, state):
+        """Return a new policy from the given state"""
+        # TODO Comput noise
+        mu = self.logits(state)
+        noise = np.random.normal(size=self._act_dim)
+        pi = distributions.Normal(loc=mu,
+                                  scale=torch.exp(self.sigma * noise))
+
+        return pi
+
+    def forward(self, obs):
+        pi_new = self.pi.sample_policy(obs)
+        act = pi_new.sample()
+
+        return self.squash_f(act)
+
+    @classmethod
+    def log_p(cls, pi, act):
+        """Compute log probabilities of the policy w.r.t actions"""
+        return pi.log_prob(act).sum(axis=-1)
 
 
 class MLPCritic(nn.Module):
@@ -34,6 +79,7 @@ class MLPCritic(nn.Module):
     """
 
     def __init__(self, obs_dim: int, act_dim: int,  hidden_sizes: list,  activation: object):
+        super(MLPCritic, self).__init__()
         self.q = mlp(obs_dim + act_dim,  hidden_sizes + [1],  activation)
 
     def forward(self, obs, action):
@@ -59,4 +105,6 @@ class MLPActorCritic(nn.module):
             the current policy
         """
         with torch.no_grad():
-            return self.pi(obs).numpy().cpu()
+            act = self.pi(obs)
+
+        return act.numpy().cpu()
