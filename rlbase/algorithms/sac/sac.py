@@ -76,7 +76,8 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         epochs: int = 100,
         batch_size: int = 64, alpha: float = .05,
         q_lr: float = 1e-3,
-        pi_lr: float = 1e-4,
+        pi_lr: float = 1e-4, gamma: float = .99,
+        polyyak: float = .995,
         seed: int = 1, **args):
     """
         Soft Actor Critic
@@ -115,6 +116,10 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
 
         pi_lr (float): Policy learning rate
 
+        gamma (float): Reward discounting factor
+
+        polyyak (float): Interpolation factor during updating of
+            target network
     """
 
     np.random.seed(seed)
@@ -161,9 +166,23 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
 
     def compute_pi_loss(data):
         """Returns policy loss"""
-        ...
+        rew = data['rew']
+        dones = data['dones']
+        obs_n = data['obs_n']
+        obs = data['obs']
+        act = data['act']
 
-    def compute_q_loss(data, gamma: float):
+        act_tilde = actor_critic.pi(obs)
+        qv_1 = actor_critic.q_1(obs, act_tilde)
+        qv_2 = actor_critic.q_2(obs, act_tilde)
+
+        q_v = min(qv_1, qv_2)
+
+        pi_loss = q_v - alpha * actor_critic.pi.log_p(act_tilde)
+
+        return - pi_loss
+
+    def compute_q_loss(data):
         """Returns Q loss"""
         rew = data['rew']
         dones = data['dones']
@@ -205,6 +224,30 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         for p in actor_critic.q_2.parameters():
             p.requires_grad = False
 
+        zero_optim(pi_optim)
+        pi_loss = compute_pi_loss(data)
+
+        pi_loss.backward()
+        pi_optim.step()
+
+        for p in actor_critic.q_1.parameters():
+            p.requires_grad = True
+
+        for p in actor_critic.q_2.parameters():
+            p.requires_grad = True
+
+        # update target
+
+        with torch.no_grad():
+            phi_params = actor_critic.parameters()
+            phi_target_params = ac_target.parameters()
+
+            for param, target_param in zip(phi_params, phi_target_params):
+
+                # rho(target) + (1 - rho)param
+                target_param.data.mul_(polyyak)
+                target_param.data.add_(param.data.mul(1 - polyyak))
+
     eps_len, eps_ret = 0
 
     update_frequency = steps_per_epoch // epochs
@@ -222,7 +265,8 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
                 act = env.action_space.sample()
 
             else:
-                act =  # get action from policy
+                obs = torch.from_numpy(obs).float().to(device)
+                act = actor_critic.act(obs, mean_act=False)
 
             obs_n, rew, done, _ = env.step(act)
             r_buffer.store(obs, act, obs_n, rew, done)

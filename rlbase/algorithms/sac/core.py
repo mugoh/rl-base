@@ -61,9 +61,17 @@ class MLPActor(nn.Module):
 
         return pi
 
-    def forward(self, obs):
+    def forward(self, obs, mean_act=False):
+        """Sample action
+
+           mean_act (bool): If True, sample action from normal
+            distribution without stochasticity
+        """
         pi_new = self.pi.sample_policy(obs)
         act = pi_new.sample()
+
+        if mean_act:
+            return act
 
         return self.squash_f(act)
 
@@ -99,12 +107,12 @@ class MLPActorCritic(nn.module):
 
         self.pi = MLPActor(obs_dim, act_dim, hidden_sizes, activation)
 
-    def act(self, obs):
+    def act(self, obs, mean_act=False):
         """
             Select action for given observation with
             the current policy
         """
         with torch.no_grad():
-            act = self.pi(obs)
+            act = self.pi(obs, mean_act)
 
         return act.numpy().cpu()
