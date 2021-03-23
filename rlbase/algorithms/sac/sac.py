@@ -70,7 +70,8 @@ class ReplayBuffer:
         return samples
 
 
-def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
+def sac(env, ac_kwargs={},
+        actor_critic=core.MLPActorCritic, memory_size: int = int(1e6),
         exploration_steps: int = 10000, max_eps_len: int = 1000,
         start_update: int = 3000,
         steps_per_epoch: int = 5000,
@@ -135,14 +136,16 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
     act_dim = env.action_space.shape[0]
 
     r_buffer = ReplayBuffer(
-        size=buffer_size, act_dim=act_dim, obs_dim=obs_dim, device=device)
+        size=memory_size,
+        act_dim=act_dim,
+        obs_dim=obs_dim, device=device)
     # Init pi and Qs parameters
     actor_critic = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
     ac_target = copy.deepcopy(actor_critic).to(device)
 
     q_loss_f = nn.MSELoss()
 
-    q_params = list(actor_critic.q_1.parameters) + \
+    q_params = list(actor_critic.q_1.parameters()) + \
         list(actor_critic.q_2.parameters())
     q_optim = torch.optim.Adam(q_params, lr=q_lr)
     pi_optim = torch.optim.Adam(actor_critic.pi.parameters(), pi_lr)
@@ -199,15 +202,16 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         obs = data['obs']
         act = data['act']
 
-        act_tilde = actor_critic.pi(obs)
+        act_tilde, pi = actor_critic.pi(obs, return_pi=True)
         qv_1 = actor_critic.q_1(obs, act_tilde)
         qv_2 = actor_critic.q_2(obs, act_tilde)
 
-        q_v = min(qv_1, qv_2)
+        #q_v = ([qv_1, qv_2])
+        q_v = qv_1 if qv_1.mean() < qv_2.mean() else qv_2
 
-        pi_loss = q_v - alpha * actor_critic.pi.log_p(act_tilde)
+        pi_loss = q_v - alpha * actor_critic.pi.log_p(pi, act_tilde)
 
-        return - pi_loss
+        return -pi_loss.mean()
 
     def compute_q_loss(data):
         """Returns Q loss"""
@@ -220,14 +224,18 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         # target = r + gamma(1 - d)[Q_t(s', a') + alpha * H(pi(a_tilde, xi))]
 
         # Min Q target
-        act_tilde = actor_critic.pi(obs_n)
+        act_tilde, pi = actor_critic.pi(obs_n, return_pi=True)
         q1_pred = ac_target.q_1(obs_n, act_tilde)
         q2_pred = ac_target.q_2(obs_n, act_tilde)
 
-        q_pred = min(q1_pred, q2_pred)
+        # q_pred = min([q1_pred, q2_pred])
+        if q1_pred.mean() < q2_pred.mean():
+            q_pred = q1_pred
+        else:
+            q_pred = q1_pred
 
         target = rew + gamma * (1 - dones) * q_pred - \
-            (alpha * actor_critic.pi.log_p(act_tilde))
+            (alpha * actor_critic.pi.log_p(pi, act_tilde))
 
         q1_loss = q_loss_f(ac_target.q_1(obs, act), target)
         q2_loss = q_loss_f(ac_target.q_2(obs, act), target)
@@ -239,7 +247,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         zero_optim(q_optim)
         q1_loss, q2_loss = compute_q_loss(data)
 
-        q1_loss.backward()
+        q1_loss.backward(retain_graph=True)
         q2_loss.backward()
 
         q_optim.step()
@@ -267,7 +275,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
             'q1': q1_loss.item(),
             'q2': q2_loss.item(),
             'q': q1_loss.item() + q2_loss.item(),
-            'pi': pi_lr.item()
+            'pi': pi_loss.item()
         }
         logger.add_scalars('Loss/', loss_tags, n_epoch)
         logger.add_scalar
@@ -331,7 +339,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
             # update
             if steps_run >= start_update and not steps_run % update_frequency:
                 data = r_buffer.sample(batch_size)
-                update(data)
+                update(data, epoch)
         logs = dict(Epoch=epoch,
                     AverageEpisodeLength=np.mean(eps_len_logs),
                     AverageEpisodeReturn=np.mean(eps_ret_logs),
@@ -346,10 +354,11 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
             logs['EvalAvReturn'] = eval_eps_ret
 
         l_t = epoch
-        logger.add_scalar('AvEpsLen', logs['AverageEpisodeLen'], l_t)
+        logger.add_scalar('AvEpsLen', logs['AverageEpisodeLength'], l_t)
         logger.add_scalar('EpsReturn/Max', logs['MaxEpsReturn'], l_t)
         logger.add_scalar('EpsReturn/Min', logs['MinEpsReturn'], l_t)
-        logger.add_scalar('EpsReturn/Average', logs['AverageEpsReturn'], l_t)
+        logger.add_scalar('EpsReturn/Average',
+                          logs['AverageEpisodeReturn'], l_t)
 
         q1_l_mean, q2_l_mean = np.mean(q1_losses), np.mean(q2_losses)
         logger.add_scalar('Loss/Av-q1', q1_l_mean, l_t)
@@ -361,7 +370,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         q1_losses, q2_losses, pi_losses = [], [], []
 
         if t == 0:
-            first_run_ret = logs['AverageEpsReturn']
+            first_run_ret = logs['AverageEpisodeReturn']
             logs['FirstEpsReturn'] = first_run_ret
 
         print('\n\n')
@@ -391,7 +400,7 @@ def main():
         'gamma': .997,
         'exploration_steps': 10000,
         'steps_per_epoch': 1000,
-        'batch_size': 128,
+        'batch_size': 32,  # 128,
         'epochs': 100
     }
     all_args = {**train_args, **eval_args}

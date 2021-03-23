@@ -55,28 +55,32 @@ class MLPActor(nn.Module):
         """Return a new policy from the given state"""
         # TODO Comput noise
         mu = self.logits(state)
-        noise = np.random.normal(size=self._act_dim)
+        noise = torch.from_numpy(np.random.normal(size=self._act_dim))
         pi = distributions.Normal(loc=mu,
-                                  scale=torch.exp(self.sigma * noise))
+                                  scale=torch.exp(
+                                      self.log_std(state).mul(noise)))
 
         return pi
 
-    def forward(self, obs, mean_act=False):
+    def forward(self, obs, mean_act=False, return_pi=False):
         """Sample action
 
            mean_act (bool): If True, sample action from normal
             distribution without stochasticity
         """
-        pi_new = self.pi.sample_policy(obs)
+        pi_new = self.sample_policy(obs)
         act = pi_new.sample()
 
         if mean_act:
-            return act
+            action = act
+        else:
+            action = self.squash_f(act)
 
-        return self.squash_f(act)
+        if return_pi:
+            return action, pi_new
+        return action
 
-    @classmethod
-    def log_p(cls, pi, act):
+    def log_p(self, pi, act):
         """Compute log probabilities of the policy w.r.t actions"""
         return pi.log_prob(act).sum(axis=-1)
 
@@ -96,7 +100,7 @@ class MLPCritic(nn.Module):
         return self.q(obs_act).squeeze(-1)
 
 
-class MLPActorCritic(nn.module):
+class MLPActorCritic(nn.Module):
     def __init__(self, obs_dim: int, act_dim: int, activation: object = nn.ReLU,
                  hidden_sizes: list = [64, 64],
                  size: int = 2):
@@ -115,4 +119,4 @@ class MLPActorCritic(nn.module):
         with torch.no_grad():
             act = self.pi(obs, mean_act)
 
-        return act.numpy().cpu()
+        return act.cpu().numpy()
