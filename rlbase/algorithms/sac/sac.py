@@ -11,6 +11,7 @@ import numpy as np
 
 from torch.utils.tensorboard import SummaryWriter
 
+import gym
 
 import core
 
@@ -78,7 +79,8 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         q_lr: float = 1e-3,
         pi_lr: float = 1e-4, gamma: float = .99,
         polyyak: float = .995,
-        seed: int = 1, **args):
+        seed: int = 1,
+        evaluation_episodes=50, **args):
     """
         Soft Actor Critic
 
@@ -152,8 +154,33 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         'data', env.unwrapped.spec.id + args.get('env_name', '') + '_' + run_t)
 
     logger = SummaryWriter(log_dir=path)
+    q1_losses, q2_losses, pi_losses = [], [], []
 
-    def zero_optim(optimizer, set_none: Optional[bool] = False):
+    def eval_agent(epoch, kwargs=args):
+        """Evaluate the updated policy"""
+        test_env = kwargs['test_env']
+        eval_eps_lens = []
+        eval_eps_rets = []
+        for eps in range(evaluation_episodes):
+            eps_length, eps_return, obsv = 0, 0, test_env.reset()
+
+            for _ in range(kwargs.get('eval_steps_per_epoch', 200)):
+                obsv = torch.from_numpy(obsv).float().to(device)
+                act = actor_critic.act(obsv, mean_act=True)
+                obsv_n, rew, done, _ = env.step(act)
+
+            eps_length += 1
+            eps_return += rew
+            obsv = obsv_n
+
+            if done:
+                eval_eps_lens.append(eps_length)
+                eval_eps_rets.append(eps_return)
+            logger.add_scalar('Evaluation/Return', eps_return, epoch)
+            logger.add_scalar('Evaluation/EpsLen', eps_length, epoch)
+        return np.mean(eval_eps_lens), np.mean(eval_eps_rets)
+
+    def zero_optim(optimizer, set_none=False):
         """
             Set Grads to None
         """
@@ -197,7 +224,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         q1_pred = ac_target.q_1(obs_n, act_tilde)
         q2_pred = ac_target.q_2(obs_n, act_tilde)
 
-        q_pred = min(q1_target, q2_target)
+        q_pred = min(q1_pred, q2_pred)
 
         target = rew + gamma * (1 - dones) * q_pred - \
             (alpha * actor_critic.pi.log_p(act_tilde))
@@ -207,7 +234,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
 
         return q1_loss, q2_loss
 
-    def update(data):
+    def update(data, n_epoch):
         """Updates the policy and Q functions"""
         zero_optim(q_optim)
         q1_loss, q2_loss = compute_q_loss(data)
@@ -216,6 +243,8 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
         q2_loss.backward()
 
         q_optim.step()
+
+        nonlocal q1_losses, pi_losses, q2_losses
 
         # update pi
         for p in actor_critic.q_1.parameters():
@@ -229,6 +258,19 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
 
         pi_loss.backward()
         pi_optim.step()
+
+        q1_losses.append(q1_loss.item())
+        q2_losses.append(q2_loss.item())
+        pi_losses.append(pi_loss.item())
+
+        loss_tags = {
+            'q1': q1_loss.item(),
+            'q2': q2_loss.item(),
+            'q': q1_loss.item() + q2_loss.item(),
+            'pi': pi_lr.item()
+        }
+        logger.add_scalars('Loss/', loss_tags, n_epoch)
+        logger.add_scalar
 
         for p in actor_critic.q_1.parameters():
             p.requires_grad = True
@@ -248,7 +290,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
                 target_param.data.mul_(polyyak)
                 target_param.data.add_(param.data.mul(1 - polyyak))
 
-    eps_len, eps_ret = 0
+    eps_len, eps_ret = 0, 0
 
     update_frequency = steps_per_epoch // epochs
 
@@ -266,7 +308,7 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
 
             else:
                 obs = torch.from_numpy(obs).float().to(device)
-                act = actor_critic.act(obs, mean_act=False)
+                act = actor_critic.act(obs, mean_act=True)
 
             obs_n, rew, done, _ = env.step(act)
             r_buffer.store(obs, act, obs_n, rew, done)
@@ -290,3 +332,71 @@ def sac(env, ac_kwargs={}, actor_critic=None, memory_size: int = int(1e6),
             if steps_run >= start_update and not steps_run % update_frequency:
                 data = r_buffer.sample(batch_size)
                 update(data)
+        logs = dict(Epoch=epoch,
+                    AverageEpisodeLength=np.mean(eps_len_logs),
+                    AverageEpisodeReturn=np.mean(eps_ret_logs),
+                    MinEpsReturn=np.min(eps_ret_logs),
+                    MaxEpsReturn=np.max(eps_ret_logs),
+                    RunTime=time.time()-start_time
+                    )
+
+        if args.get('evaluate_agent'):
+            eval_eps_len, eval_eps_ret = eval_agent(epoch)
+            logs['EvalAvEpsLength'] = eval_eps_len
+            logs['EvalAvReturn'] = eval_eps_ret
+
+        l_t = epoch
+        logger.add_scalar('AvEpsLen', logs['AverageEpisodeLen'], l_t)
+        logger.add_scalar('EpsReturn/Max', logs['MaxEpsReturn'], l_t)
+        logger.add_scalar('EpsReturn/Min', logs['MinEpsReturn'], l_t)
+        logger.add_scalar('EpsReturn/Average', logs['AverageEpsReturn'], l_t)
+
+        q1_l_mean, q2_l_mean = np.mean(q1_losses), np.mean(q2_losses)
+        logger.add_scalar('Loss/Av-q1', q1_l_mean, l_t)
+        logger.add_scalar('Loss/Av-q2', q2_l_mean, l_t)
+        logger.add_scalar('Loss/Av-q', q1_l_mean + q2_l_mean, l_t)
+        logger.add_scalar('Loss/Av-pi', np.mean(pi_losses), l_t)
+        logger.flush()
+
+        q1_losses, q2_losses, pi_losses = [], [], []
+
+        if t == 0:
+            first_run_ret = logs['AverageEpsReturn']
+            logs['FirstEpsReturn'] = first_run_ret
+
+        print('\n\n')
+        print('-' * 15)
+        for k, v in logs.items():
+            print(k, v)
+
+
+def main():
+    env_name = 'HalfCheetah-v2'
+    env = gym.make(env_name)
+
+    eval_args = {
+        'eval_steps_per_epoch': 200,
+        'evaluation_episodes': 10,
+        'test_env': gym.make(env_name),
+        'evaluate_agent': False
+    }
+
+    train_args = {
+        'seed': 0,
+        'device': 'cpu',
+        'max_eps_len': 150,
+        'evaluate_agent': False,
+        'q_lr': 1e-4,
+        'pi_lr': 1e-4,
+        'gamma': .997,
+        'exploration_steps': 10000,
+        'steps_per_epoch': 1000,
+        'batch_size': 128,
+        'epochs': 100
+    }
+    all_args = {**train_args, **eval_args}
+    sac(env, **all_args)
+
+
+if __name__ == '__main__':
+    main()
