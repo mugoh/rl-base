@@ -160,7 +160,10 @@ def sac(env, ac_kwargs={},
     q1_losses, q2_losses, pi_losses = [], [], []
 
     def eval_agent(epoch, kwargs=args):
-        """Evaluate the updated policy"""
+        """Evaluate the updated policy
+
+          During evaluation, use the mean action
+        """
         test_env = kwargs['test_env']
         eval_eps_lens = []
         eval_eps_rets = []
@@ -316,7 +319,7 @@ def sac(env, ac_kwargs={},
 
             else:
                 obs = torch.from_numpy(obs).float().to(device)
-                act = actor_critic.act(obs, mean_act=True)
+                act = actor_critic.act(obs, mean_act=False)
 
             obs_n, rew, done, _ = env.step(act)
             r_buffer.store(obs, act, obs_n, rew, done)
@@ -331,7 +334,7 @@ def sac(env, ac_kwargs={},
             if terminal:
                 # append logs
                 eps_len_logs.append(eps_len)
-                eps_ret_logs.append(rew)
+                eps_ret_logs.append(eps_ret)
 
                 # reset state
                 obs, eps_ret, eps_len = env.reset(), 0, 0
@@ -361,6 +364,9 @@ def sac(env, ac_kwargs={},
                           logs['AverageEpisodeReturn'], l_t)
 
         q1_l_mean, q2_l_mean = np.mean(q1_losses), np.mean(q2_losses)
+        logs['Q1LossAvg'] = q1_l_mean
+        logs['Q2LossAvg'] = q2_l_mean
+
         logger.add_scalar('Loss/Av-q1', q1_l_mean, l_t)
         logger.add_scalar('Loss/Av-q2', q2_l_mean, l_t)
         logger.add_scalar('Loss/Av-q', q1_l_mean + q2_l_mean, l_t)
@@ -397,10 +403,10 @@ def main():
         'evaluate_agent': False,
         'q_lr': 1e-4,
         'pi_lr': 1e-4,
-        'gamma': .997,
+        'gamma': .99,
         'exploration_steps': 10000,
-        'steps_per_epoch': 1000,
-        'batch_size': 32,  # 128,
+        'steps_per_epoch': 4000,
+        'batch_size': 128,
         'epochs': 100
     }
     all_args = {**train_args, **eval_args}

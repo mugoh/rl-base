@@ -51,10 +51,17 @@ class MLPActor(nn.Module):
         self.squash_f = nn.Tanh()
         self._act_dim = act_dim
 
-    def sample_policy(self, state):
-        """Return a new policy from the given state"""
-        # TODO Comput noise
+    def sample_policy(self, state, mean_act: bool = False):
+        """Return a new policy from the given state
+           At test time, we use the mean action,
+           instead of sampling from the distribution.
+
+           The spinning up docs say this improves performance
+           over the original stochastic policy
+        """
         mu = self.logits(state)
+        if mean_act:
+            return mu
         noise = torch.from_numpy(np.random.normal(size=self._act_dim))
         pi = distributions.Normal(loc=mu,
                                   scale=torch.exp(
@@ -68,12 +75,12 @@ class MLPActor(nn.Module):
            mean_act (bool): If True, sample action from normal
             distribution without stochasticity
         """
-        pi_new = self.sample_policy(obs)
-        act = pi_new.sample()
 
         if mean_act:
-            action = act
+            action = self.sample_policy(obs, mean_act)
         else:
+            pi_new = self.sample_policy(obs)
+            act = pi_new.sample()
             action = self.squash_f(act)
 
         if return_pi:
