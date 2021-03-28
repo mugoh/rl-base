@@ -135,12 +135,15 @@ def sac(env, ac_kwargs={},
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
 
+    act_limit = env.action_space.high[0]
+
     r_buffer = ReplayBuffer(
         size=memory_size,
         act_dim=act_dim,
         obs_dim=obs_dim, device=device)
     # Init pi and Qs parameters
-    actor_critic = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
+    actor_critic = actor_critic(
+        obs_dim, act_dim, act_limit ** ac_kwargs).to(device)
     ac_target = copy.deepcopy(actor_critic).to(device)
 
     q_loss_f = nn.MSELoss()
@@ -274,14 +277,11 @@ def sac(env, ac_kwargs={},
         q2_losses.append(q2_loss.item())
         pi_losses.append(pi_loss.item())
 
-        loss_tags = {
-            'q1': q1_loss.item(),
-            'q2': q2_loss.item(),
-            'q': q1_loss.item() + q2_loss.item(),
-            'pi': pi_loss.item()
-        }
-        logger.add_scalars('Loss/', loss_tags, n_epoch)
-        logger.add_scalar
+        logger.add_scalar('Loss/Q1', q1_loss.item())
+        logger.add_scalar('Loss/Q2', q2_loss.item())
+        logger.add_scalar(
+            'Loss/Q_mean', np.mean(q2_loss.item() + q2_loss.item()))
+        logger.add_scalar('Loss/Pi', pi_loss.item())
 
         for p in actor_critic.q_1.parameters():
             p.requires_grad = True
@@ -363,6 +363,10 @@ def sac(env, ac_kwargs={},
         logger.add_scalar('EpsReturn/Average',
                           logs['AverageEpisodeReturn'], l_t)
 
+        if l_t == 0:
+            first_run_ret = logs['AverageEpisodeReturn']
+            logs['FirstEpsReturn'] = first_run_ret
+
         q1_l_mean, q2_l_mean = np.mean(q1_losses), np.mean(q2_losses)
         logs['Q1LossAvg'] = q1_l_mean
         logs['Q2LossAvg'] = q2_l_mean
@@ -374,10 +378,6 @@ def sac(env, ac_kwargs={},
         logger.flush()
 
         q1_losses, q2_losses, pi_losses = [], [], []
-
-        if t == 0:
-            first_run_ret = logs['AverageEpisodeReturn']
-            logs['FirstEpsReturn'] = first_run_ret
 
         print('\n\n')
         print('-' * 15)
@@ -405,7 +405,7 @@ def main():
         'pi_lr': 1e-4,
         'gamma': .99,
         'exploration_steps': 10000,
-        'steps_per_epoch': 4000,
+        'steps_per_epoch': 5000,
         'batch_size': 128,
         'epochs': 100
     }

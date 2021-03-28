@@ -41,7 +41,7 @@ class MLPActor(nn.Module):
         u_theta(s) + sigma_theta(s) * noise
     """
 
-    def __init__(self, obs_dim: int, act_dim: int,  hidden_sizes: list,  activation: object):
+    def __init__(self, obs_dim: int, act_dim: int,  hidden_sizes: list,  activation: object, act_limit: float):
         super(MLPActor, self).__init__()
 
         self.logits = mlp(obs_dim, hidden_sizes + [act_dim],
@@ -50,6 +50,7 @@ class MLPActor(nn.Module):
         self.log_std = mlp(obs_dim, hidden_sizes + [act_dim])
         self.squash_f = nn.Tanh()
         self._act_dim = act_dim
+        self.act_limit = act_limit
 
     def sample_policy(self, state, mean_act: bool = False):
         """Return a new policy from the given state
@@ -83,6 +84,8 @@ class MLPActor(nn.Module):
             act = pi_new.sample()
             action = self.squash_f(act)
 
+        action *= self.act_limit
+
         if return_pi:
             return action, pi_new
         return action
@@ -108,7 +111,7 @@ class MLPCritic(nn.Module):
 
 
 class MLPActorCritic(nn.Module):
-    def __init__(self, obs_dim: int, act_dim: int, activation: object = nn.ReLU,
+    def __init__(self, obs_dim: int, act_dim: int, act_limit: float, activation: object = nn.ReLU,
                  hidden_sizes: list = [64, 64],
                  size: int = 2):
         super(MLPActorCritic, self).__init__()
@@ -116,7 +119,8 @@ class MLPActorCritic(nn.Module):
         self.q_1 = MLPCritic(obs_dim, act_dim, hidden_sizes, activation)
         self.q_2 = MLPCritic(obs_dim, act_dim, hidden_sizes, activation)
 
-        self.pi = MLPActor(obs_dim, act_dim, hidden_sizes, activation)
+        self.pi = MLPActor(obs_dim, act_dim, hidden_sizes,
+                           activation, act_limit)
 
     def act(self, obs, mean_act=False):
         """
