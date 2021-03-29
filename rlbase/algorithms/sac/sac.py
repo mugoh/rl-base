@@ -143,7 +143,7 @@ def sac(env, ac_kwargs={},
         obs_dim=obs_dim, device=device)
     # Init pi and Qs parameters
     actor_critic = actor_critic(
-        obs_dim, act_dim, act_limit ** ac_kwargs).to(device)
+        obs_dim, act_dim, act_limit, **ac_kwargs).to(device)
     ac_target = copy.deepcopy(actor_critic).to(device)
 
     q_loss_f = nn.MSELoss()
@@ -160,7 +160,7 @@ def sac(env, ac_kwargs={},
         'data', env.unwrapped.spec.id + args.get('env_name', '') + '_' + run_t)
 
     logger = SummaryWriter(log_dir=path)
-    q1_losses, q2_losses, pi_losses = [], [], []
+    q_losses,  pi_losses = [], []
 
     def eval_agent(epoch, kwargs=args):
         """Evaluate the updated policy
@@ -213,7 +213,7 @@ def sac(env, ac_kwargs={},
         qv_2 = actor_critic.q_2(obs, act_tilde)
 
         #q_v = ([qv_1, qv_2])
-        q_v = qv_1 if qv_1.mean() < qv_2.mean() else qv_2
+        q_v = torch.min(qv_1, qv_2)
 
         pi_loss = q_v - alpha * actor_critic.pi.log_p(pi, act_tilde)
 
@@ -230,41 +230,39 @@ def sac(env, ac_kwargs={},
         # target = r + gamma(1 - d)[Q_t(s', a') + alpha * H(pi(a_tilde, xi))]
 
         # Min Q target
-        act_tilde, pi = actor_critic.pi(obs_n, return_pi=True)
-        q1_pred = ac_target.q_1(obs_n, act_tilde)
-        q2_pred = ac_target.q_2(obs_n, act_tilde)
+        q1_pred = ac_target.q_1(obs_n, act)
+        q2_pred = ac_target.q_2(obs_n, act)
 
-        # q_pred = min([q1_pred, q2_pred])
-        if q1_pred.mean() < q2_pred.mean():
-            q_pred = q1_pred
-        else:
-            q_pred = q1_pred
+        with torch.no_grad():
+            act_tilde, pi = actor_critic.pi(obs_n, return_pi=True)
+            q1_target = ac_target.q1(obs, act_tilde)
+            q2_target = ac_target.q2(obs, act_tilde)
 
-        target = rew + gamma * (1 - dones) * q_pred - \
-            (alpha * actor_critic.pi.log_p(pi, act_tilde))
+            # q_target= min([q1_pred, q2_pred])
+            q_target = torch.min(q1_target, q2_target)
 
-        q1_loss = q_loss_f(ac_target.q_1(obs, act), target)
-        q2_loss = q_loss_f(ac_target.q_2(obs, act), target)
+            backup = rew + gamma * (1 - dones) * q_target - \
+                (alpha * actor_critic.pi.log_p(pi, act_tilde))
 
-        return q1_loss, q2_loss
+        q1_loss = q_loss_f(ac_target.q_1(obs, act), backup)
+        q2_loss = q_loss_f(ac_target.q_2(obs, act), backup)
+
+        return q1_loss + q2_loss
 
     def update(data, n_epoch):
         """Updates the policy and Q functions"""
         zero_optim(q_optim)
-        q1_loss, q2_loss = compute_q_loss(data)
+        q_loss = compute_q_loss(data)
 
-        q1_loss.backward(retain_graph=True)
-        q2_loss.backward()
+        q_loss.backward()
 
         q_optim.step()
 
-        nonlocal q1_losses, pi_losses, q2_losses
+        nonlocal q_losses, pi_losses
 
         # update pi
-        for p in actor_critic.q_1.parameters():
-            p.requires_grad = False
-
-        for p in actor_critic.q_2.parameters():
+        # Freeze Q-network to not waste resources computing grads
+        for p in q_params:
             p.requires_grad = False
 
         zero_optim(pi_optim)
@@ -273,20 +271,12 @@ def sac(env, ac_kwargs={},
         pi_loss.backward()
         pi_optim.step()
 
-        q1_losses.append(q1_loss.item())
-        q2_losses.append(q2_loss.item())
+        q_losses.append(q_loss.item())
         pi_losses.append(pi_loss.item())
 
-        logger.add_scalar('Loss/Q1', q1_loss.item())
-        logger.add_scalar('Loss/Q2', q2_loss.item())
-        logger.add_scalar(
-            'Loss/Q_mean', np.mean(q2_loss.item() + q2_loss.item()))
-        logger.add_scalar('Loss/Pi', pi_loss.item())
+        logger.add_scalar('Loss/Q', q_loss.item())
 
-        for p in actor_critic.q_1.parameters():
-            p.requires_grad = True
-
-        for p in actor_critic.q_2.parameters():
+        for p in q_params:
             p.requires_grad = True
 
         # update target
@@ -367,9 +357,8 @@ def sac(env, ac_kwargs={},
             first_run_ret = logs['AverageEpisodeReturn']
             logs['FirstEpsReturn'] = first_run_ret
 
-        q1_l_mean, q2_l_mean = np.mean(q1_losses), np.mean(q2_losses)
-        logs['Q1LossAvg'] = q1_l_mean
-        logs['Q2LossAvg'] = q2_l_mean
+        q_l_mean = np.mean(q_losses)
+        logs['QLossAvg'] = q_l_mean
 
         logger.add_scalar('Loss/Av-q1', q1_l_mean, l_t)
         logger.add_scalar('Loss/Av-q2', q2_l_mean, l_t)
@@ -377,7 +366,7 @@ def sac(env, ac_kwargs={},
         logger.add_scalar('Loss/Av-pi', np.mean(pi_losses), l_t)
         logger.flush()
 
-        q1_losses, q2_losses, pi_losses = [], [], []
+        q_losses,  pi_losses = [], []
 
         print('\n\n')
         print('-' * 15)

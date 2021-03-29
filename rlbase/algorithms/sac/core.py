@@ -47,7 +47,9 @@ class MLPActor(nn.Module):
         self.logits = mlp(obs_dim, hidden_sizes + [act_dim],
                           activation=nn.Tanh)
 
-        self.log_std = mlp(obs_dim, hidden_sizes + [act_dim])
+        self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
+        self.log_std_layer = nn.Linear(hidden_sizes[-1], act_dim)
+
         self.squash_f = nn.Tanh()
         self._act_dim = act_dim
         self.act_limit = act_limit
@@ -60,13 +62,14 @@ class MLPActor(nn.Module):
            The spinning up docs say this improves performance
            over the original stochastic policy
         """
-        mu = self.logits(state)
+        act_pred = self.logits(state)
+        mu = self.mu_layer(act_pred)
+        log_std = self.log_std_layer(act_pred)
         if mean_act:
             return mu
-        noise = torch.from_numpy(np.random.normal(size=self._act_dim))
         pi = distributions.Normal(loc=mu,
                                   scale=torch.exp(
-                                      self.log_std(state).mul(noise)))
+                                      log_std))
 
         return pi
 
@@ -81,7 +84,7 @@ class MLPActor(nn.Module):
             action = self.sample_policy(obs, mean_act)
         else:
             pi_new = self.sample_policy(obs)
-            act = pi_new.sample()
+            act = pi_new.rsample()
             action = self.squash_f(act)
 
         action *= self.act_limit
@@ -92,7 +95,12 @@ class MLPActor(nn.Module):
 
     def log_p(self, pi, act):
         """Compute log probabilities of the policy w.r.t actions"""
-        return pi.log_prob(act).sum(axis=-1)
+        # log_mu - \sum_i=1^D[1 - tanh^2(mu_i)]
+        log_pi = pi.log_prob(act).sum(axis=-1)
+        log_pi -= (2*(np.log(2) - act -
+                   nn.functional.softplus(-2 * act))).sum(axis=1)
+
+        return log_pi
 
 
 class MLPCritic(nn.Module):
