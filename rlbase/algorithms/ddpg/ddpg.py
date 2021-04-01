@@ -350,9 +350,9 @@ def ddpg(env, ac_kwargs={}, actor_critic=core.MLPActorCritic,  memory_size=int(1
 
             # perform update
             if steps_run >= start_update and not steps_run % update_frequency:
-                data = rep_buffer.sample(batch_size)
                 # Keep ratio of env interactions to n_updates = 1
                 for _ in range(update_frequency):
+                    data = rep_buffer.sample(batch_size)
                     update(epoch, data)
 
         l_t = epoch  # log_time, start at 0
