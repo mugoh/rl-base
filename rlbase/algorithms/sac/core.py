@@ -35,6 +35,10 @@ def mlp(x, hidden_layers, activation=nn.Tanh, size=2, output_activation=nn.Ident
     return nn.Sequential(*net_layers)
 
 
+LOG_STD_MAX = 2
+LOG_STD_MIN = -20
+
+
 class MLPActor(nn.Module):
     """
         Policy: Selects actions given states
@@ -44,13 +48,13 @@ class MLPActor(nn.Module):
     def __init__(self, obs_dim: int, act_dim: int,  hidden_sizes: list,  activation: object, act_limit: float):
         super(MLPActor, self).__init__()
 
-        self.logits = mlp(obs_dim, hidden_sizes + [act_dim],
-                          activation=nn.Tanh)
+        self.logits = mlp(obs_dim, hidden_sizes,
+                          activation=nn.ReLU)
 
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
         self.log_std_layer = nn.Linear(hidden_sizes[-1], act_dim)
 
-        self.squash_f = nn.Tanh()
+        self.squash_f = torch.tanh
         self._act_dim = act_dim
         self.act_limit = act_limit
 
@@ -65,6 +69,8 @@ class MLPActor(nn.Module):
         act_pred = self.logits(state)
         mu = self.mu_layer(act_pred)
         log_std = self.log_std_layer(act_pred)
+        log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
+
         if mean_act:
             return mu
         pi = distributions.Normal(loc=mu,
@@ -84,10 +90,10 @@ class MLPActor(nn.Module):
             action = self.sample_policy(obs, mean_act)
         else:
             pi_new = self.sample_policy(obs)
-            act = pi_new.rsample()
-            action = self.squash_f(act)
+            action = pi_new.rsample()
 
-        action *= self.act_limit
+        action = self.squash_f(action)
+        action = self.act_limit * action
 
         if return_pi:
             return action, pi_new
