@@ -80,8 +80,8 @@ def sac(env, ac_kwargs={},
         q_lr: float = 1e-3,
         pi_lr: float = 1e-4, gamma: float = .99,
         polyyak: float = .995,
-        seed: int = 1, update_frequency: 50,
-        evaluation_episodes=50, **args):
+        seed: int = 1, update_frequency: int = 50,
+        evaluation_episodes: int = 20, **args):
     """
         Soft Actor Critic
 
@@ -149,18 +149,24 @@ def sac(env, ac_kwargs={},
         obs_dim, act_dim, act_limit, **ac_kwargs).to(device)
     ac_target = copy.deepcopy(actor_critic).to(device)
 
-    q_loss_f = nn.MSELoss()
+    for param in ac_target.parameters():
+        param.requires_grad = False
 
     q_params = list(actor_critic.q_1.parameters()) + \
         list(actor_critic.q_2.parameters())
     q_optim = torch.optim.Adam(q_params, lr=q_lr)
     pi_optim = torch.optim.Adam(actor_critic.pi.parameters(), pi_lr)
 
-    print(f'Param counts: {core.count(actor_critic)}\n')
+    print(
+        f'Param counts: pi: {core.count(actor_critic.pi)}' +
+        f'\tq_1/2: {core.count(actor_critic.pi)}\n')
+
+    q_loss_f = nn.MSELoss()
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
     path = os.path.join(
         'data', env.unwrapped.spec.id + args.get('env_name', '') + '_' + run_t)
+    print('save_path: ', path)
 
     logger = SummaryWriter(log_dir=path)
     q_losses,  pi_losses = [], []
@@ -177,9 +183,9 @@ def sac(env, ac_kwargs={},
         for eps in range(evaluation_episodes):
             eps_length, eps_return, obsv = 0, 0, test_env.reset()
 
-            for _ in range(kwargs.get('eval_steps_per_epoch', 200)):
+            for _ in range(kwargs.get('eval_steps_per_epoch', 20)):
                 obsv = torch.from_numpy(obsv).float().to(device)
-                act = actor_critic.act(obsv, mean_act=True)
+                act, _ = actor_critic.act(obsv, mean_act=True)
 
                 obsv_n, rew, done, _ = env.step(act)
 
@@ -190,8 +196,10 @@ def sac(env, ac_kwargs={},
                 if done or eps_length == kwargs.get('eval_steps_per_epoch', 100):
                     eval_eps_lens.append(eps_length)
                     eval_eps_rets.append(eps_return)
-            logger.add_scalar('Evaluation/Return', np.mean(eps_return), epoch)
-            logger.add_scalar('Evaluation/EpsLen', np.mean(eps_length), epoch)
+
+
+        logger.add_scalar('Evaluation/Return', np.mean(eps_return), epoch)
+        logger.add_scalar('Evaluation/EpsLen', np.mean(eps_length), epoch)
         return np.mean(eval_eps_lens), np.mean(eval_eps_rets)
 
     def zero_optim(optimizer, set_none=False):
@@ -209,14 +217,15 @@ def sac(env, ac_kwargs={},
         """Returns policy loss"""
         obs = data['obs']
 
-        act_tilde, pi = actor_critic.pi(obs, return_pi=True)
+        act_tilde, logp = actor_critic.pi(obs, return_pi=True)
+
         qv_1 = actor_critic.q_1(obs, act_tilde)
         qv_2 = actor_critic.q_2(obs, act_tilde)
 
-        #q_v = ([qv_1, qv_2])
+        # q_v = ([qv_1, qv_2])
         q_v = torch.min(qv_1, qv_2)
 
-        pi_loss = q_v - alpha * actor_critic.pi.log_p(pi, act_tilde)
+        pi_loss = q_v - alpha * logp
 
         return -pi_loss.mean()
 
@@ -231,31 +240,31 @@ def sac(env, ac_kwargs={},
         # target = r + gamma(1 - d)[Q_t(s', a') + alpha * H(pi(a_tilde, xi))]
 
         # Min Q target
-        q1_pred = ac_target.q_1(obs_n, act)
-        q2_pred = ac_target.q_2(obs_n, act)
+        q1_pred = actor_critic.q_1(obs, act)
+        q2_pred = actor_critic.q_2(obs, act)
 
         with torch.no_grad():
-            act_tilde, pi = actor_critic.pi(obs_n, return_pi=True)
-            q1_target = ac_target.q_1(obs, act_tilde)
-            q2_target = ac_target.q_2(obs, act_tilde)
+            act_tilde, logp = actor_critic.pi(obs_n, return_pi=True)
+
+            q1_target = ac_target.q_1(obs_n, act_tilde)
+            q2_target = ac_target.q_2(obs_n, act_tilde)
 
             # q_target= min([q1_pred, q2_pred])
             q_target = torch.min(q1_target, q2_target)
 
-            backup = rew + gamma * (1 - dones) * \
-                (q_target - alpha * actor_critic.pi.log_p(pi, act_tilde))
+            backup = rew + gamma * (1 - dones) * (q_target - alpha * logp)
 
-        q1_loss = q_loss_f(ac_target.q_1(obs, act), backup)
-        q2_loss = q_loss_f(ac_target.q_2(obs, act), backup)
+        q1_loss = q_loss_f(q1_pred, backup)
+        q2_loss = q_loss_f(q2_pred, backup)
 
-        return q1_loss + q2_loss
+        loss = q1_loss + q2_loss
+
+        return loss
 
     def update(data, n_epoch):
         """Updates the policy and Q functions"""
 
-        torch.autograd.set_detect_anomaly(True)
-
-        zero_optim(q_optim)
+        zero_optim(q_optim, True)
         q_loss = compute_q_loss(data)
 
         q_loss.backward()
@@ -269,7 +278,7 @@ def sac(env, ac_kwargs={},
         for p in q_params:
             p.requires_grad = False
 
-        zero_optim(pi_optim)
+        zero_optim(pi_optim, True)
         pi_loss = compute_pi_loss(data)
 
         pi_loss.backward()
@@ -278,7 +287,8 @@ def sac(env, ac_kwargs={},
         q_losses.append(q_loss.item())
         pi_losses.append(pi_loss.item())
 
-        logger.add_scalar('Loss/Q', q_loss.item())
+        logger.add_scalar('Loss/Q', q_loss.item(), n_epoch)
+        logger.add_scalar('Loss/pi', pi_loss.item(), n_epoch)
 
         for p in q_params:
             p.requires_grad = True
@@ -293,12 +303,13 @@ def sac(env, ac_kwargs={},
 
                 # rho(target) + (1 - rho)param
                 target_param.data.mul_(polyyak)
-                target_param.data.add_(param.data.mul(1 - polyyak))
+                target_param.data.add_(param.data.mul((1-polyyak)))
 
     eps_len, eps_ret = 0, 0
 
     start_time = time.time()
     obs = env.reset()
+    first_run_ret = float('-inf')
 
     for epoch in range(epochs):
         eps_len_logs, eps_ret_logs = [], []
@@ -311,7 +322,7 @@ def sac(env, ac_kwargs={},
 
             else:
                 obs = torch.from_numpy(obs).float().to(device)
-                act = actor_critic.act(obs, mean_act=False)
+                act, _ = actor_critic.act(obs, mean_act=False)
 
             obs_n, rew, done, _ = env.step(act)
             r_buffer.store(obs, act, obs_n, rew, done)
@@ -332,7 +343,7 @@ def sac(env, ac_kwargs={},
                 obs, eps_ret, eps_len = env.reset(), 0, 0
 
             # update
-            if steps_run >= start_update and not steps_run % update_frequency:
+            if steps_run >= start_update and not t % update_frequency:
                 for _ in range(update_frequency):
                     data = r_buffer.sample(batch_size)
                     update(data, epoch)
@@ -341,7 +352,8 @@ def sac(env, ac_kwargs={},
                     AverageEpisodeReturn=np.mean(eps_ret_logs),
                     MinEpsReturn=np.min(eps_ret_logs),
                     MaxEpsReturn=np.max(eps_ret_logs),
-                    RunTime=time.time()-start_time
+                    RunTime=time.time()-start_time,
+                    StepsRun=steps_run
                     )
 
         if args.get('evaluate_agent'):
@@ -358,10 +370,12 @@ def sac(env, ac_kwargs={},
 
         if l_t == 0:
             first_run_ret = logs['AverageEpisodeReturn']
-            logs['FirstEpsReturn'] = first_run_ret
+        logs['FirstEpsReturn'] = first_run_ret
 
         q_l_mean = np.mean(q_losses)
-        logs['QLossAvg'] = q_l_mean
+        pi_l_mean = np.mean(pi_losses)
+        logs['Q-LossAvg'] = q_l_mean
+        logs['Pi-LossAvg'] = pi_l_mean
 
         logger.add_scalar('Loss/Av-q', q_l_mean, l_t)
         logger.add_scalar('Loss/Av-pi', np.mean(pi_losses), l_t)
@@ -381,24 +395,28 @@ def main():
 
     eval_args = {
         'eval_steps_per_epoch': 200,
-        'evaluation_episodes': 10,
+        'evaluation_episodes': 5,
         'test_env': gym.make(env_name),
-        'evaluate_agent': True
+        'evaluate_agent': False
     }
-    ac_kwargs = {'hidden_sizes': [256, 256]}
+    ac_kwargs = {'hidden_sizes': [64, 64]}
 
     train_args = {
         'seed': 0,
         'device': 'cpu',
+        'update_frequency': 30,
         'max_eps_len': 150,
-        'evaluate_agent': False,
         'q_lr': 1e-3,
         'pi_lr': 1e-3,
         'gamma': .99,
-        'exploration_steps': 10000,
-        'steps_per_epoch': 5000,
-        'batch_size': 128,
-        'epochs': 100
+        'alpha': .2,
+        'start_update': 1000,
+        'exploration_steps': 3000,
+        'steps_per_epoch': 2000,
+        'batch_size': 64,
+        'epochs': 50,
+        'env_name': 'alpha_.2'
+
     }
     all_args = {**train_args, **eval_args, 'ac_kwargs': ac_kwargs}
     sac(env, **all_args)

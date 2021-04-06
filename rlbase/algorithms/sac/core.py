@@ -68,11 +68,12 @@ class MLPActor(nn.Module):
         """
         act_pred = self.logits(state)
         mu = self.mu_layer(act_pred)
-        log_std = self.log_std_layer(act_pred)
-        log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
 
         if mean_act:
             return mu
+        log_std = self.log_std_layer(act_pred)
+        log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
+
         pi = distributions.Normal(loc=mu,
                                   scale=torch.exp(
                                       log_std))
@@ -92,19 +93,22 @@ class MLPActor(nn.Module):
             pi_new = self.sample_policy(obs)
             action = pi_new.rsample()
 
+        if return_pi:
+            log_pi = self.log_p(pi_new, action)
+        else:
+            log_pi = None
+
         action = self.squash_f(action)
         action = self.act_limit * action
 
-        if return_pi:
-            return action, pi_new
-        return action
+        return action, log_pi
 
     def log_p(self, pi, act):
         """Compute log probabilities of the policy w.r.t actions"""
         # log_mu - \sum_i=1^D[1 - tanh^2(mu_i)]
         log_pi = pi.log_prob(act).sum(axis=-1)
         log_pi -= (2*(np.log(2) - act -
-                   nn.functional.softplus(-2 * act))).sum(axis=1)
+                   nn.functional.softplus(-2 * act))).sum(axis=-1)
 
         return log_pi
 
@@ -130,8 +134,10 @@ class MLPActorCritic(nn.Module):
                  size: int = 2):
         super(MLPActorCritic, self).__init__()
 
-        self.q_1 = MLPCritic(obs_dim, act_dim, hidden_sizes, activation)
-        self.q_2 = MLPCritic(obs_dim, act_dim, hidden_sizes, activation)
+        self.q_1 = MLPCritic(
+            obs_dim, act_dim, hidden_sizes, activation)
+        self.q_2 = MLPCritic(
+            obs_dim, act_dim, hidden_sizes, activation)
 
         self.pi = MLPActor(obs_dim, act_dim, hidden_sizes,
                            activation, act_limit)
@@ -144,4 +150,6 @@ class MLPActorCritic(nn.Module):
         with torch.no_grad():
             act = self.pi(obs, mean_act)
 
-        return act.cpu().numpy()
+            act, log_pi = act
+            act = act.cpu().numpy()
+            return act, log_pi
