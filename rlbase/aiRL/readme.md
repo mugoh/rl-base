@@ -150,11 +150,11 @@ This work is build on Python3.6
  ##### 3.1 Examples of program outputs
   - Expert Policy
 
-   ![ expert demo performance](https://github.com/mugoh/rl-base/blob/master/aiRL/halfcheetah%20data/iRL_expert_demo.png) 
+   ![ expert demo performance](https://github.com/mugoh/rl-base/blob/master/rlbase/aiRL/halfcheetah%20data/iRL_expert_demo.png) 
 
   - Expert Policy vs iRL based policy
 
-  ![iRL vs stdPPO](https://github.com/mugoh/rl-base/blob/master/aiRL/halfcheetah%20data/Figure_1_irl_vs_stdPPO.png)
+  ![iRL vs stdPPO](https://github.com/mugoh/rl-base/blob/master/rlbase/aiRL/halfcheetah%20data/Figure_1_irl_vs_stdPPO.png)
 
     Your results may vary
 
@@ -162,7 +162,7 @@ This work is build on Python3.6
 
   - (b) Expert Policy vs iRL based policy
 
-   ![iRL_learned_vs_demo_returns](https://github.com/mugoh/rl-base/blob/master/aiRL/halfcheetah%20data/iRL_learned_vs_demo_returns.png)
+   ![iRL_learned_vs_demo_returns](https://github.com/mugoh/rl-base/blob/master/rlbase/aiRL/halfcheetah%20data/iRL_learned_vs_demo_returns.png)
 
 
 
